@@ -13,7 +13,7 @@ st.title("📊 交易数据看板")
 # 配置 - 你的GitHub信息
 # ============================================================
 GITHUB_USERNAME = "WZH0821"
-GITHUB_REPO = "yuningqingkuang"
+GITHUB_REPO = "yuningqingkuang-"
 GITHUB_BRANCH = "main"
 EXCEL_FILENAME = "01-交易类数据.xlsx"
 
