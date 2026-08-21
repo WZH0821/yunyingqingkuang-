@@ -15,7 +15,7 @@ st.title("📊 交易数据看板")
 GITHUB_USERNAME = "WZH0821"
 GITHUB_REPO = "yunyingqingkuang-"
 GITHUB_BRANCH = "main"
-EXCEL_FILENAME = "data.xlsx"
+EXCEL_FILENAME = "data1.xlsx"
 
 # 构建GitHub原始文件URL
 GITHUB_FILE_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME}"
