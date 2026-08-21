@@ -1747,6 +1747,1608 @@ try:
             filtered_df.head(100).to_excel(writer, sheet_name='筛选后数据', index=False)
         return output.getvalue()
     
+    # ============================================================
+    # 10. 期货品种分析（补充）
+    # ============================================================
+    st.subheader("📊 期货品种分析-市场")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        future_market_df = df_vol_market.copy()
+        future_company_df = df_vol_company.copy()
+        future_unit = '亿手'
+        future_title = '成交量'
+    elif pie_data_type == '成交额':
+        future_market_df = df_amt_market.copy()
+        future_company_df = df_amt_company.copy()
+        future_unit = '万亿元'
+        future_title = '成交额'
+    else:  # 持仓量
+        future_market_df = df_oi_market.copy()
+        future_company_df = df_oi_company.copy()
+        future_unit = '百万手'
+        future_title = '持仓量'
+    
+    # 清理数据
+    future_market_df = future_market_df.loc[:, ~future_market_df.columns.isna()]
+    future_market_df = future_market_df.loc[:, future_market_df.columns != '']
+    future_market_df = future_market_df.loc[:, ~future_market_df.columns.duplicated()]
+    future_market_df = future_market_df.dropna(axis=1, how='all')
+    
+    future_company_df = future_company_df.loc[:, ~future_company_df.columns.isna()]
+    future_company_df = future_company_df.loc[:, future_company_df.columns != '']
+    future_company_df = future_company_df.loc[:, ~future_company_df.columns.duplicated()]
+    future_company_df = future_company_df.dropna(axis=1, how='all')
+    
+    # ===== 筛选期货品种（产品类型 == '期货'） =====
+    if '产品类型' in future_market_df.columns:
+        future_market_df = future_market_df[future_market_df['产品类型'] == '期货']
+        future_company_df = future_company_df[future_company_df['产品类型'] == '期货']
+    else:
+        st.warning("⚠️ 数据中无'产品类型'列，无法筛选期货品种")
+    
+    # 检查选中的月份是否存在
+    if not future_market_df.empty:
+        month_exists_in_market = selected_pie_month in future_market_df.columns
+        month_exists_in_company = selected_pie_month in future_company_df.columns
+        
+        if not month_exists_in_market:
+            st.warning(f"⚠️ 选中的月份 {selected_pie_month} 不存在于期货市场数据中")
+            # 尝试找一个存在的月份
+            available_months = [col for col in future_market_df.columns if isinstance(col, (int, float)) or (isinstance(col, str) and col.isdigit())]
+            if available_months:
+                fallback_month = available_months[0]
+                st.info(f"📌 使用替代月份: {fallback_month}")
+                actual_month = fallback_month
+            else:
+                st.warning("无可用月份数据")
+                actual_month = None
+        else:
+            actual_month = selected_pie_month
+        
+        if actual_month is not None and actual_month in future_market_df.columns and actual_month in future_company_df.columns:
+            # 按品种分组汇总
+            if '产品名称' in future_market_df.columns:
+                future_market_grouped = future_market_df.groupby('产品名称')[actual_month].sum().reset_index()
+                future_market_grouped.columns = ['品种', '市场数值']
+                future_company_grouped = future_company_df.groupby('产品名称')[actual_month].sum().reset_index()
+                future_company_grouped.columns = ['品种', '公司数值']
+            else:
+                st.warning("⚠️ 未找到'产品名称'列")
+                future_market_grouped = None
+            
+            if future_market_grouped is not None and not future_market_grouped.empty:
+                future_merged = pd.merge(future_market_grouped, future_company_grouped, on='品种', how='outer').fillna(0)
+                
+                # 成交额处理：公司数值从元转亿元
+                if pie_data_type == '成交额':
+                    future_merged['公司数值'] = future_merged['公司数值'] / 100000000
+                
+                # 计算公司占比
+                future_merged['公司占比（%）'] = (future_merged['公司数值'] / (future_merged['市场数值'] * 2) * 100).round(4)
+                future_merged['公司占比（%）'] = future_merged.apply(
+                    lambda row: 0 if row['市场数值'] == 0 else row['公司占比（%）'], 
+                    axis=1
+                )
+                
+                # 按市场数值降序排列，取前十，其余归为"其他"
+                future_merged_sorted = future_merged.sort_values('市场数值', ascending=False).reset_index(drop=True)
+                
+                if len(future_merged_sorted) > 10:
+                    top_10 = future_merged_sorted.head(10).copy()
+                    other_market = future_merged_sorted.iloc[10:]['市场数值'].sum()
+                    other_company = future_merged_sorted.iloc[10:]['公司数值'].sum()
+                    other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+                    
+                    other_row = pd.DataFrame({
+                        '品种': ['其他'],
+                        '市场数值': [other_market],
+                        '公司数值': [other_company],
+                        '公司占比（%）': [other_ratio]
+                    })
+                    future_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+                else:
+                    future_merged_top = future_merged_sorted.copy()
+                
+                # 计算市场占比
+                total_market_future = future_merged_top['市场数值'].sum()
+                
+                if total_market_future > 0:
+                    future_merged_top['市场占比（%）'] = (future_merged_top['市场数值'] / total_market_future * 100).round(2)
+                    
+                    pie_data_future = future_merged_top[['品种', '市场数值', '市场占比（%）']].copy()
+                    bar_data_future = future_merged_top[['品种', '公司占比（%）']].copy()
+                    bar_data_future = bar_data_future.sort_values('公司占比（%）', ascending=True)
+                    
+                    col_left_future, col_right_future = st.columns([1, 1], gap="medium")
+                    
+                    # ===== 左侧：饼图 =====
+                    with col_left_future:
+                        fig_pie_future = px.pie(
+                            pie_data_future,
+                            values='市场数值',
+                            names='品种',
+                            title=f'期货品种{future_title}份额（TOP10+其他）',
+                            hover_data={'市场数值': True, '市场占比（%）': True},
+                            labels={'市场数值': f'{future_title}（{future_unit}）', '市场占比（%）': '占比（%）'},
+                            hole=0.3
+                        )
+                        fig_pie_future.update_layout(
+                            title_font=dict(size=16, color='#1A5276'),
+                            font=dict(size=12),
+                            legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                            height=450
+                        )
+                        fig_pie_future.update_traces(
+                            textinfo='percent+label',
+                            texttemplate='%{label}<br>%{percent:.2%}',
+                            textfont=dict(size=10),
+                            marker=dict(line=dict(color='white', width=2)),
+                            pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_future))]
+                        )
+                        st.plotly_chart(fig_pie_future, use_container_width=True, config={'displayModeBar': False})
+                    
+                    # ===== 右侧：横向柱状图 =====
+                    with col_right_future:
+                        bar_data_sorted_future = bar_data_future.sort_values('公司占比（%）', ascending=False)
+                        max_val_future = bar_data_sorted_future['公司占比（%）'].max()
+                        
+                        fig_bar_future = px.bar(
+                            bar_data_sorted_future,
+                            x='公司占比（%）',
+                            y='品种',
+                            orientation='h',
+                            title=f'期货品种{future_title}公司占有率（TOP10+其他）',
+                            labels={'公司占比（%）': '公司占市场比重（%）', '品种': ''},
+                            text='公司占比（%）',
+                            color='公司占比（%）',
+                            color_continuous_scale='Blues',
+                            range_color=[0, max_val_future * 1.2 if max_val_future > 0 else 1]
+                        )
+                        fig_bar_future.update_layout(
+                            title_font=dict(size=16, color='#1A5276'),
+                            font=dict(size=12),
+                            xaxis=dict(
+                                title='公司占市场比重（%）',
+                                tickformat='.4f',
+                                range=[0, max_val_future * 1.3 if max_val_future > 0 else 1]
+                            ),
+                            yaxis=dict(title='', categoryorder='total ascending'),
+                            height=450,
+                            showlegend=False,
+                            coloraxis_showscale=False,
+                            plot_bgcolor='#F8F9F9',
+                            paper_bgcolor='white'
+                        )
+                        fig_bar_future.update_traces(
+                            texttemplate='%{x:.4f}%',
+                            textposition='outside',
+                            textfont=dict(size=11, color='black'),
+                            marker=dict(line=dict(color='white', width=1))
+                        )
+                        st.plotly_chart(fig_bar_future, use_container_width=True, config={'displayModeBar': False})
+                    
+                    # ===== 数据表格 =====
+                    with st.expander("📋 查看详细数据"):
+                        display_df_future = future_merged_top.copy()
+                        
+                        if pie_data_type == '成交量':
+                            market_unit_display_future = '手'
+                            company_unit_display_future = '手'
+                            display_df_future['市场数值'] = display_df_future['市场数值'].apply(lambda x: f"{x:,.0f}")
+                            display_df_future['公司数值'] = display_df_future['公司数值'].apply(lambda x: f"{x:,.0f}")
+                        elif pie_data_type == '成交额':
+                            market_unit_display_future = '亿元'
+                            company_unit_display_future = '亿元'
+                            display_df_future['市场数值'] = display_df_future['市场数值'].apply(lambda x: f"{x:,.2f}")
+                            display_df_future['公司数值'] = display_df_future['公司数值'].apply(lambda x: f"{x:,.2f}")
+                        else:  # 持仓量
+                            market_unit_display_future = '手'
+                            company_unit_display_future = '手'
+                            display_df_future['市场数值'] = display_df_future['市场数值'].apply(lambda x: f"{x:,.0f}")
+                            display_df_future['公司数值'] = display_df_future['公司数值'].apply(lambda x: f"{x:,.0f}")
+                        
+                        display_df_future['市场占比（%）'] = display_df_future['市场占比（%）'].apply(lambda x: f"{x:.2f}%")
+                        display_df_future['公司占比（%）'] = display_df_future['公司占比（%）'].apply(lambda x: f"{x:.4f}%")
+                        display_df_future.columns = ['品种', f'市场数值（{market_unit_display_future}）', f'公司数值（{company_unit_display_future}）', '公司占比（%）', '市场占比（%）']
+                        st.dataframe(display_df_future, use_container_width=True, hide_index=True)
+                else:
+                    st.warning("该月份期货市场总值为0，请选择其他月份")
+            else:
+                st.warning("期货品种数据为空，请检查数据")
+        else:
+            if actual_month is None:
+                st.warning("无法找到可用的月份数据")
+            else:
+                st.warning(f"月份 {actual_month} 在期货数据中不存在")
+    else:
+        st.info("📊 当前数据中没有期货品种（产品类型='期货'），跳过期货品种分析")
+    
+    # ============================================================
+    # 11. 期权品种分析
+    # ============================================================
+    st.subheader("📊 期权品种分析-市场")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        option_market_df = df_vol_market.copy()
+        option_company_df = df_vol_company.copy()
+        option_unit = '亿手'
+        option_title = '成交量'
+    elif pie_data_type == '成交额':
+        option_market_df = df_amt_market.copy()
+        option_company_df = df_amt_company.copy()
+        option_unit = '万亿元'
+        option_title = '成交额'
+    else:  # 持仓量
+        option_market_df = df_oi_market.copy()
+        option_company_df = df_oi_company.copy()
+        option_unit = '百万手'
+        option_title = '持仓量'
+    
+    # 筛选期权品种（产品类型 == '期货期权' 或 '现货期权'）
+    if '产品类型' in option_market_df.columns:
+        option_market_df = option_market_df[option_market_df['产品类型'].isin(['期货期权', '现货期权'])]
+        option_company_df = option_company_df[option_company_df['产品类型'].isin(['期货期权', '现货期权'])]
+    
+    # 清理数据
+    option_market_df = option_market_df.loc[:, ~option_market_df.columns.isna()]
+    option_market_df = option_market_df.loc[:, option_market_df.columns != '']
+    option_market_df = option_market_df.loc[:, ~option_market_df.columns.duplicated()]
+    option_market_df = option_market_df.dropna(axis=1, how='all')
+    
+    option_company_df = option_company_df.loc[:, ~option_company_df.columns.isna()]
+    option_company_df = option_company_df.loc[:, option_company_df.columns != '']
+    option_company_df = option_company_df.loc[:, ~option_company_df.columns.duplicated()]
+    option_company_df = option_company_df.dropna(axis=1, how='all')
+    
+    # 检查选中的月份是否存在
+    if selected_pie_month in option_market_df.columns and selected_pie_month in option_company_df.columns:
+        # 按品种分组汇总
+        option_market_grouped = option_market_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_market_grouped.columns = ['品种', '市场数值']
+        
+        option_company_grouped = option_company_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_company_grouped.columns = ['品种', '公司数值']
+        
+        option_merged = pd.merge(option_market_grouped, option_company_grouped, on='品种', how='outer').fillna(0)
+        
+        if pie_data_type == '成交额':
+            option_merged['公司数值'] = option_merged['公司数值'] / 100000000
+        
+        # 计算公司占比（四位小数）
+        option_merged['公司占比（%）'] = (option_merged['公司数值'] / (option_merged['市场数值'] * 2) * 100).round(4)
+        option_merged['公司占比（%）'] = option_merged.apply(
+            lambda row: 0 if row['市场数值'] == 0 else row['公司占比（%）'], 
+            axis=1
+        )
+        
+        # 按市场数值降序排列，取前十，其余归为"其他"
+        option_merged_sorted = option_merged.sort_values('市场数值', ascending=False).reset_index(drop=True)
+        
+        if len(option_merged_sorted) > 10:
+            top_10 = option_merged_sorted.head(10).copy()
+            other_market = option_merged_sorted.iloc[10:]['市场数值'].sum()
+            other_company = option_merged_sorted.iloc[10:]['公司数值'].sum()
+            other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+            
+            other_row = pd.DataFrame({
+                '品种': ['其他'],
+                '市场数值': [other_market],
+                '公司数值': [other_company],
+                '公司占比（%）': [other_ratio]
+            })
+            option_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+        else:
+            option_merged_top = option_merged_sorted.copy()
+        
+        # 计算市场占比
+        total_market_option = option_merged_top['市场数值'].sum()
+        
+        if total_market_option > 0:
+            option_merged_top['市场占比（%）'] = (option_merged_top['市场数值'] / total_market_option * 100).round(2)
+            
+            pie_data_option = option_merged_top[['品种', '市场数值', '市场占比（%）']].copy()
+            bar_data_option = option_merged_top[['品种', '公司占比（%）']].copy()
+            bar_data_option = bar_data_option.sort_values('公司占比（%）', ascending=True)
+            
+            col_left_option, col_right_option = st.columns([1, 1], gap="medium")
+            
+            with col_left_option:
+                fig_pie_option = px.pie(
+                    pie_data_option,
+                    values='市场数值',
+                    names='品种',
+                    title=f'期权品种{option_title}份额（TOP10+其他）',
+                    hover_data={'市场数值': True, '市场占比（%）': True},
+                    labels={'市场数值': f'{option_title}（{option_unit}）', '市场占比（%）': '占比（%）'},
+                    hole=0.3
+                )
+                fig_pie_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                    height=450
+                )
+                fig_pie_option.update_traces(
+                    textinfo='percent+label',
+                    texttemplate='%{label}<br>%{percent:.2%}',
+                    textfont=dict(size=10),
+                    marker=dict(line=dict(color='white', width=2)),
+                    pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_option))]
+                )
+                st.plotly_chart(fig_pie_option, use_container_width=True, config={'displayModeBar': False})
+            
+            with col_right_option:
+                bar_data_sorted_option = bar_data_option.sort_values('公司占比（%）', ascending=False)
+                max_val_option = bar_data_sorted_option['公司占比（%）'].max()
+                
+                fig_bar_option = px.bar(
+                    bar_data_sorted_option,
+                    x='公司占比（%）',
+                    y='品种',
+                    orientation='h',
+                    title=f'期权品种{option_title}公司占有率（TOP10+其他）',
+                    labels={'公司占比（%）': '公司占市场比重（%）', '品种': ''},
+                    text='公司占比（%）',
+                    color='公司占比（%）',
+                    color_continuous_scale='Blues',
+                    range_color=[0, max_val_option * 1.2 if max_val_option > 0 else 1]
+                )
+                fig_bar_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    xaxis=dict(
+                        title='公司占市场比重（%）',
+                        tickformat='.4f',
+                        range=[0, max_val_option * 1.3 if max_val_option > 0 else 1]
+                    ),
+                    yaxis=dict(title='', categoryorder='total ascending'),
+                    height=450,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white'
+                )
+                fig_bar_option.update_traces(
+                    texttemplate='%{x:.4f}%',
+                    textposition='outside',
+                    textfont=dict(size=11, color='black'),
+                    marker=dict(line=dict(color='white', width=1))
+                )
+                st.plotly_chart(fig_bar_option, use_container_width=True, config={'displayModeBar': False})
+            
+            with st.expander("📋 查看详细数据"):
+                display_df_option = option_merged_top.copy()
+                
+                if pie_data_type == '成交量':
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                    display_df_option['市场数值'] = display_df_option['市场数值'].apply(lambda x: f"{x:,.0f}")
+                    display_df_option['公司数值'] = display_df_option['公司数值'].apply(lambda x: f"{x:,.0f}")
+                elif pie_data_type == '成交额':
+                    market_unit_display_option = '亿元'
+                    company_unit_display_option = '亿元'
+                    display_df_option['市场数值'] = display_df_option['市场数值'].apply(lambda x: f"{x:,.2f}")
+                    display_df_option['公司数值'] = display_df_option['公司数值'].apply(lambda x: f"{x:,.2f}")
+                else:
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                    display_df_option['市场数值'] = display_df_option['市场数值'].apply(lambda x: f"{x:,.0f}")
+                    display_df_option['公司数值'] = display_df_option['公司数值'].apply(lambda x: f"{x:,.0f}")
+                
+                display_df_option['市场占比（%）'] = display_df_option['市场占比（%）'].apply(lambda x: f"{x:.2f}%")
+                display_df_option['公司占比（%）'] = display_df_option['公司占比（%）'].apply(lambda x: f"{x:.4f}%")
+                display_df_option.columns = ['品种', f'市场数值（{market_unit_display_option}）', f'公司数值（{company_unit_display_option}）', '公司占比（%）', '市场占比（%）']
+                st.dataframe(display_df_option, use_container_width=True, hide_index=True)
+        else:
+            st.warning("该月份期权数据为空，请选择其他月份")
+    else:
+        st.warning(f"选中的月份 {selected_pie_month} 不存在于期权数据中")
+
+    # ============================================================
+    # 12. 公司情况 - 各品种份额饼图 + 公司占有率柱状图（并列）
+    # ============================================================
+    st.subheader("📊 期货品种分析-公司")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        company_market_df = df_vol_market.copy()
+        company_company_df = df_vol_company.copy()
+        company_unit = '手'
+        company_title = '成交量'
+    elif pie_data_type == '成交额':
+        company_market_df = df_amt_market.copy()
+        company_company_df = df_amt_company.copy()
+        company_unit = '元'
+        company_title = '成交额'
+    else:  # 持仓量
+        company_market_df = df_oi_market.copy()
+        company_company_df = df_oi_company.copy()
+        company_unit = '手'
+        company_title = '持仓量'
+    
+    # 筛选期货品种（产品类型 == '期货'）
+    if '产品类型' in company_market_df.columns:
+        company_market_df = company_market_df[company_market_df['产品类型'] == '期货']
+        company_company_df = company_company_df[company_company_df['产品类型'] == '期货']
+    
+    # 清理数据
+    company_market_df = company_market_df.loc[:, ~company_market_df.columns.isna()]
+    company_market_df = company_market_df.loc[:, company_market_df.columns != '']
+    company_market_df = company_market_df.loc[:, ~company_market_df.columns.duplicated()]
+    company_market_df = company_market_df.dropna(axis=1, how='all')
+    
+    company_company_df = company_company_df.loc[:, ~company_company_df.columns.isna()]
+    company_company_df = company_company_df.loc[:, company_company_df.columns != '']
+    company_company_df = company_company_df.loc[:, ~company_company_df.columns.duplicated()]
+    company_company_df = company_company_df.dropna(axis=1, how='all')
+    
+    if not company_market_df.empty and selected_pie_month in company_market_df.columns and selected_pie_month in company_company_df.columns:
+        company_market_grouped = company_market_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        company_market_grouped.columns = ['品种', '市场数值']
+        
+        company_company_grouped = company_company_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        company_company_grouped.columns = ['品种', '公司数值']
+        
+        company_merged = pd.merge(company_market_grouped, company_company_grouped, on='品种', how='outer').fillna(0)
+        
+        # 成交额处理：公司数值从元转亿元
+        if pie_data_type == '成交额':
+            company_merged['公司数值'] = company_merged['公司数值'] / 100000000
+        
+        # 计算公司占市场比重（用于右侧柱状图）
+        company_merged['公司占市场比重（%）'] = (company_merged['公司数值'] / (company_merged['市场数值'] * 2) * 100).round(4)
+        company_merged['公司占市场比重（%）'] = company_merged.apply(
+            lambda row: 0 if row['市场数值'] == 0 else row['公司占市场比重（%）'], 
+            axis=1
+        )
+        
+        # 按公司数值降序排列（饼图按公司份额排序）
+        company_merged_sorted = company_merged.sort_values('公司数值', ascending=False).reset_index(drop=True)
+        
+        if len(company_merged_sorted) > 10:
+            top_10 = company_merged_sorted.head(10).copy()
+            other_market = company_merged_sorted.iloc[10:]['市场数值'].sum()
+            other_company = company_merged_sorted.iloc[10:]['公司数值'].sum()
+            other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+            
+            other_row = pd.DataFrame({
+                '品种': ['其他'],
+                '市场数值': [other_market],
+                '公司数值': [other_company],
+                '公司占市场比重（%）': [other_ratio]
+            })
+            company_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+        else:
+            company_merged_top = company_merged_sorted.copy()
+        
+        total_market_company = company_merged_top['市场数值'].sum()
+        
+        if total_market_company > 0:
+            # 计算公司内部占比（饼图用）
+            total_company = company_merged_top['公司数值'].sum()
+            company_merged_top['公司内部占比（%）'] = (company_merged_top['公司数值'] / total_company * 100).round(2) if total_company > 0 else 0
+            
+            # ===== 饼图和柱状图左右并列 =====
+            col_left_company, col_right_company = st.columns([1, 1], gap="medium")
+            
+            # 左列：饼图（公司各品种份额）
+            with col_left_company:
+                pie_data_company = company_merged_top[['品种', '公司数值', '公司内部占比（%）']].copy()
+                fig_pie_company = px.pie(
+                    pie_data_company,
+                    values='公司数值',
+                    names='品种',
+                    title=f'公司期货{company_title}份额（TOP10）',
+                    hover_data={'公司数值': True, '公司内部占比（%）': True},
+                    labels={'公司数值': f'{company_title}（{company_unit}）', '公司内部占比（%）': '占比（%）'},
+                    hole=0.3
+                )
+                fig_pie_company.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                    height=450
+                )
+                fig_pie_company.update_traces(
+                    textinfo='percent+label',
+                    texttemplate='%{label}<br>%{percent:.2%}',
+                    textfont=dict(size=10),
+                    marker=dict(line=dict(color='white', width=2)),
+                    pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_company))]
+                )
+                st.plotly_chart(fig_pie_company, use_container_width=True, config={'displayModeBar': False})
+            
+            # 右列：柱状图（公司占市场比重）
+            with col_right_company:
+                bar_data_company = company_merged_top[['品种', '公司占市场比重（%）']].copy()
+                bar_data_sorted_company = bar_data_company.sort_values('公司占市场比重（%）', ascending=False)
+                max_val_company = bar_data_sorted_company['公司占市场比重（%）'].max()
+                
+                fig_bar_company = px.bar(
+                    bar_data_sorted_company,
+                    x='公司占市场比重（%）',
+                    y='品种',
+                    orientation='h',
+                    title=f'公司期货{company_title}占市场比重（TOP10）',
+                    labels={'公司占市场比重（%）': '公司占市场比重（%）', '品种': ''},
+                    text='公司占市场比重（%）',
+                    color='公司占市场比重（%）',
+                    color_continuous_scale='Blues',
+                    range_color=[0, max_val_company * 1.2 if max_val_company > 0 else 1]
+                )
+                fig_bar_company.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    xaxis=dict(
+                        title='公司占市场比重（%）',
+                        tickformat='.4f',
+                        range=[0, max_val_company * 1.3 if max_val_company > 0 else 1]
+                    ),
+                    yaxis=dict(title='', categoryorder='total ascending'),
+                    height=450,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white'
+                )
+                fig_bar_company.update_traces(
+                    texttemplate='%{x:.4f}%',
+                    textposition='outside',
+                    textfont=dict(size=11, color='black'),
+                    marker=dict(line=dict(color='white', width=1))
+                )
+                st.plotly_chart(fig_bar_company, use_container_width=True, config={'displayModeBar': False})
+            
+            # 数据表格
+            with st.expander("📋 查看详细数据"):
+                display_df_company = company_merged_top.copy()
+                display_df_company = display_df_company.sort_values('公司数值', ascending=False)
+                
+                if pie_data_type == '成交量':
+                    market_unit_display_company = '手'
+                    company_unit_display_company = '手'
+                    display_df_company['市场数值'] = display_df_company['市场数值'].apply(lambda x: f"{x:,.0f}")
+                    display_df_company['公司数值'] = display_df_company['公司数值'].apply(lambda x: f"{x:,.0f}")
+                elif pie_data_type == '成交额':
+                    market_unit_display_company = '亿元'
+                    company_unit_display_company = '亿元'
+                    display_df_company['市场数值'] = display_df_company['市场数值'].apply(lambda x: f"{x:,.2f}")
+                    display_df_company['公司数值'] = display_df_company['公司数值'].apply(lambda x: f"{x:,.2f}")
+                else:
+                    market_unit_display_company = '手'
+                    company_unit_display_company = '手'
+                    display_df_company['市场数值'] = display_df_company['市场数值'].apply(lambda x: f"{x:,.0f}")
+                    display_df_company['公司数值'] = display_df_company['公司数值'].apply(lambda x: f"{x:,.0f}")
+                
+                display_df_company['公司内部占比（%）'] = display_df_company['公司内部占比（%）'].apply(lambda x: f"{x:.2f}%")
+                display_df_company['公司占市场比重（%）'] = display_df_company['公司占市场比重（%）'].apply(lambda x: f"{x:.4f}%")
+                display_df_company.columns = ['品种', f'市场数值（{market_unit_display_company}）', f'公司数值（{company_unit_display_company}）', '公司内部占比（%）', '公司占市场比重（%）']
+                st.dataframe(display_df_company, use_container_width=True, hide_index=True)
+        else:
+            st.warning("该月份公司数据为空，请选择其他月份")
+    else:
+        if company_market_df.empty:
+            st.info("📊 当前数据中没有期货品种（产品类型='期货'），跳过期货品种分析")
+        else:
+            st.warning(f"选中的月份 {selected_pie_month} 不存在于公司数据中")
+
+    # ============================================================
+    # 13. 期权品种分析-公司
+    # ============================================================
+    st.subheader("📊 期权品种分析-公司")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        option_market_df = df_vol_market.copy()
+        option_company_df = df_vol_company.copy()
+        option_unit = '手'
+        option_title = '成交量'
+    elif pie_data_type == '成交额':
+        option_market_df = df_amt_market.copy()
+        option_company_df = df_amt_company.copy()
+        option_unit = '元'
+        option_title = '成交额'
+    else:  # 持仓量
+        option_market_df = df_oi_market.copy()
+        option_company_df = df_oi_company.copy()
+        option_unit = '手'
+        option_title = '持仓量'
+    
+    # 筛选期权品种（产品类型 == '期货期权' 或 '现货期权'）
+    if '产品类型' in option_market_df.columns:
+        option_market_df = option_market_df[option_market_df['产品类型'].isin(['期货期权', '现货期权'])]
+        option_company_df = option_company_df[option_company_df['产品类型'].isin(['期货期权', '现货期权'])]
+    
+    # 清理数据
+    option_market_df = option_market_df.loc[:, ~option_market_df.columns.isna()]
+    option_market_df = option_market_df.loc[:, option_market_df.columns != '']
+    option_market_df = option_market_df.loc[:, ~option_market_df.columns.duplicated()]
+    option_market_df = option_market_df.dropna(axis=1, how='all')
+    
+    option_company_df = option_company_df.loc[:, ~option_company_df.columns.isna()]
+    option_company_df = option_company_df.loc[:, option_company_df.columns != '']
+    option_company_df = option_company_df.loc[:, ~option_company_df.columns.duplicated()]
+    option_company_df = option_company_df.dropna(axis=1, how='all')
+    
+    if not option_market_df.empty and selected_pie_month in option_market_df.columns and selected_pie_month in option_company_df.columns:
+        option_market_grouped = option_market_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_market_grouped.columns = ['品种', '市场数值']
+        
+        option_company_grouped = option_company_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_company_grouped.columns = ['品种', '公司数值']
+        
+        option_merged = pd.merge(option_market_grouped, option_company_grouped, on='品种', how='outer').fillna(0)
+        
+        # 成交额处理：公司数值从元转亿元
+        if pie_data_type == '成交额':
+            option_merged['公司数值'] = option_merged['公司数值'] / 100000000
+        
+        # 计算公司占市场比重（用于右侧柱状图）
+        option_merged['公司占市场比重（%）'] = (option_merged['公司数值'] / (option_merged['市场数值'] * 2) * 100).round(4)
+        option_merged['公司占市场比重（%）'] = option_merged.apply(
+            lambda row: 0 if row['市场数值'] == 0 else row['公司占市场比重（%）'], 
+            axis=1
+        )
+        
+        # 按公司数值降序排列（饼图按公司份额排序）
+        option_merged_sorted = option_merged.sort_values('公司数值', ascending=False).reset_index(drop=True)
+        
+        if len(option_merged_sorted) > 10:
+            top_10 = option_merged_sorted.head(10).copy()
+            other_market = option_merged_sorted.iloc[10:]['市场数值'].sum()
+            other_company = option_merged_sorted.iloc[10:]['公司数值'].sum()
+            other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+            
+            other_row = pd.DataFrame({
+                '品种': ['其他'],
+                '市场数值': [other_market],
+                '公司数值': [other_company],
+                '公司占市场比重（%）': [other_ratio]
+            })
+            option_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+        else:
+            option_merged_top = option_merged_sorted.copy()
+        
+        total_market_option = option_merged_top['市场数值'].sum()
+        
+        if total_market_option > 0:
+            # 计算公司内部占比（饼图用）
+            total_company = option_merged_top['公司数值'].sum()
+            option_merged_top['公司内部占比（%）'] = (option_merged_top['公司数值'] / total_company * 100).round(2) if total_company > 0 else 0
+            
+            # ===== 饼图和柱状图左右并列 =====
+            col_left_option, col_right_option = st.columns([1, 1], gap="medium")
+            
+            # 左列：饼图（公司各品种份额）
+            with col_left_option:
+                pie_data_option = option_merged_top[['品种', '公司数值', '公司内部占比（%）']].copy()
+                fig_pie_option = px.pie(
+                    pie_data_option,
+                    values='公司数值',
+                    names='品种',
+                    title=f'公司期权{option_title}份额（TOP10）',
+                    hover_data={'公司数值': True, '公司内部占比（%）': True},
+                    labels={'公司数值': f'{option_title}（{option_unit}）', '公司内部占比（%）': '占比（%）'},
+                    hole=0.3
+                )
+                fig_pie_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                    height=450
+                )
+                fig_pie_option.update_traces(
+                    textinfo='percent+label',
+                    texttemplate='%{label}<br>%{percent:.2%}',
+                    textfont=dict(size=10),
+                    marker=dict(line=dict(color='white', width=2)),
+                    pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_option))]
+                )
+                st.plotly_chart(fig_pie_option, use_container_width=True, config={'displayModeBar': False}, key="option_pie_chart")
+            
+            # 右列：柱状图（公司占市场比重）
+            with col_right_option:
+                bar_data_option = option_merged_top[['品种', '公司占市场比重（%）']].copy()
+                bar_data_sorted_option = bar_data_option.sort_values('公司占市场比重（%）', ascending=False)
+                max_val_option = bar_data_sorted_option['公司占市场比重（%）'].max()
+                
+                fig_bar_option = px.bar(
+                    bar_data_sorted_option,
+                    x='公司占市场比重（%）',
+                    y='品种',
+                    orientation='h',
+                    title=f'公司期权{option_title}占市场比重（TOP10）',
+                    labels={'公司占市场比重（%）': '公司占市场比重（%）', '品种': ''},
+                    text='公司占市场比重（%）',
+                    color='公司占市场比重（%）',
+                    color_continuous_scale='Blues',
+                    range_color=[0, max_val_option * 1.2 if max_val_option > 0 else 1]
+                )
+                fig_bar_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    xaxis=dict(
+                        title='公司占市场比重（%）',
+                        tickformat='.4f',
+                        range=[0, max_val_option * 1.3 if max_val_option > 0 else 1]
+                    ),
+                    yaxis=dict(title='', categoryorder='total ascending'),
+                    height=450,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white'
+                )
+                fig_bar_option.update_traces(
+                    texttemplate='%{x:.4f}%',
+                    textposition='outside',
+                    textfont=dict(size=11, color='black'),
+                    marker=dict(line=dict(color='white', width=1))
+                )
+                st.plotly_chart(fig_bar_option, use_container_width=True, config={'displayModeBar': False}, key="option_bar_chart")
+            
+            # 数据表格
+            with st.expander("📋 查看详细数据"):
+                display_df_option = option_merged_top.copy()
+                display_df_option = display_df_option.sort_values('公司数值', ascending=False)
+                
+                if pie_data_type == '成交量':
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                    display_df_option['市场数值'] = display_df_option['市场数值'].apply(lambda x: f"{x:,.0f}")
+                    display_df_option['公司数值'] = display_df_option['公司数值'].apply(lambda x: f"{x:,.0f}")
+                elif pie_data_type == '成交额':
+                    market_unit_display_option = '亿元'
+                    company_unit_display_option = '亿元'
+                    display_df_option['市场数值'] = display_df_option['市场数值'].apply(lambda x: f"{x:,.2f}")
+                    display_df_option['公司数值'] = display_df_option['公司数值'].apply(lambda x: f"{x:,.2f}")
+                else:
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                    display_df_option['市场数值'] = display_df_option['市场数值'].apply(lambda x: f"{x:,.0f}")
+                    display_df_option['公司数值'] = display_df_option['公司数值'].apply(lambda x: f"{x:,.0f}")
+                
+                display_df_option['公司内部占比（%）'] = display_df_option['公司内部占比（%）'].apply(lambda x: f"{x:.2f}%")
+                display_df_option['公司占市场比重（%）'] = display_df_option['公司占市场比重（%）'].apply(lambda x: f"{x:.4f}%")
+                display_df_option.columns = ['品种', f'市场数值（{market_unit_display_option}）', f'公司数值（{company_unit_display_option}）', '公司内部占比（%）', '公司占市场比重（%）']
+                st.dataframe(display_df_option, use_container_width=True, hide_index=True)
+        else:
+            st.warning("该月份期权数据为空，请选择其他月份")
+    else:
+        if option_market_df.empty:
+            st.info("📊 当前数据中没有期权品种（产品类型='期货期权'或'现货期权'），跳过期权品种分析")
+        else:
+            st.warning(f"选中的月份 {selected_pie_month} 不存在于期权数据中")
+
+    # ============================================================
+    # 14. 资金统计（今年 vs 去年）
+    # ============================================================
+    try:
+        # 加载资金对账表
+        df_fund_current = data_dict['fund_current']
+        df_fund_last_year = data_dict['fund_last_year']
+        
+        # 清理资金对账表数据
+        df_fund_current = df_fund_current.loc[:, ~df_fund_current.columns.isna()]
+        df_fund_current = df_fund_current.loc[:, df_fund_current.columns != '']
+        df_fund_current = df_fund_current.loc[:, ~df_fund_current.columns.duplicated()]
+        df_fund_current = df_fund_current.dropna(axis=1, how='all')
+        
+        df_fund_last_year = df_fund_last_year.loc[:, ~df_fund_last_year.columns.isna()]
+        df_fund_last_year = df_fund_last_year.loc[:, df_fund_last_year.columns != '']
+        df_fund_last_year = df_fund_last_year.loc[:, ~df_fund_last_year.columns.duplicated()]
+        df_fund_last_year = df_fund_last_year.dropna(axis=1, how='all')
+        
+        st.subheader("📊运营总体情况")
+        
+        # ---- 月份筛选器 ----
+        all_months = []
+        if not df_fund_current.empty:
+            current_months_list = df_fund_current.iloc[:, 0].dropna().unique()
+            for m in current_months_list:
+                m_str = str(int(m)) if isinstance(m, (int, float)) else str(m)
+                if len(m_str) == 6 and m_str.isdigit():
+                    all_months.append(m_str)
+        if not df_fund_last_year.empty:
+            last_months_list = df_fund_last_year.iloc[:, 0].dropna().unique()
+            for m in last_months_list:
+                m_str = str(int(m)) if isinstance(m, (int, float)) else str(m)
+                if len(m_str) == 6 and m_str.isdigit():
+                    all_months.append(m_str)
+        
+        all_months = sorted(set(all_months), reverse=True)
+        
+        if all_months:
+            selected_month = st.selectbox(
+                "选择月份",
+                options=all_months,
+                format_func=lambda x: f"{x[:4]}年{x[4:6]}月",
+                key="fund_month_selector"
+            )
+        else:
+            selected_month = None
+            st.info("暂无月份数据")
+        
+        # 获取各列
+        d_col = df_fund_current.columns[3] if len(df_fund_current.columns) > 3 else None
+        e_col = df_fund_current.columns[4] if len(df_fund_current.columns) > 4 else None
+        f_col = df_fund_current.columns[5] if len(df_fund_current.columns) > 5 else None
+        g_col = df_fund_current.columns[6] if len(df_fund_current.columns) > 6 else None
+        h_col = '期末权益' if '期末权益' in df_fund_current.columns else df_fund_current.columns[7] if len(df_fund_current.columns) > 7 else None
+        j_col = df_fund_current.columns[9] if len(df_fund_current.columns) > 9 else None
+        k_col = df_fund_current.columns[10] if len(df_fund_current.columns) > 10 else None
+        
+        if h_col is not None:
+            # ---- 今年数据 ----
+            current_data = []
+            current_months = df_fund_current.iloc[:, 0].dropna().unique()
+            for month_val in current_months:
+                month_str = str(int(month_val)) if isinstance(month_val, (int, float)) else str(month_val)
+                if len(month_str) == 6 and month_str.isdigit():
+                    month_mask = df_fund_current.iloc[:, 0] == month_val
+                    equity_sum = df_fund_current.loc[month_mask, h_col].sum()
+                    if d_col is not None and e_col is not None:
+                        net_deposit_sum = df_fund_current.loc[month_mask, d_col].sum() - df_fund_current.loc[month_mask, e_col].sum()
+                    else:
+                        net_deposit_sum = None
+                    if f_col is not None:
+                        fee_sum = df_fund_current.loc[month_mask, f_col].sum()
+                    else:
+                        fee_sum = None
+                    if g_col is not None and j_col is not None and k_col is not None:
+                        pnl_sum = (df_fund_current.loc[month_mask, g_col].sum() + 
+                                  df_fund_current.loc[month_mask, j_col].sum() - 
+                                  df_fund_current.loc[month_mask, k_col].sum())
+                    else:
+                        pnl_sum = None
+                    if pd.notna(equity_sum) and equity_sum != 0:
+                        current_data.append({
+                            '月份': month_str,
+                            '期末权益': equity_sum,
+                            '净入金': net_deposit_sum if net_deposit_sum is not None else 0,
+                            '留存手续费': fee_sum if fee_sum is not None else 0,
+                            '平仓盈亏': pnl_sum if pnl_sum is not None else 0,
+                            '类型': '今年'
+                        })
+            
+            # ---- 去年数据 ----
+            last_year_data = []
+            last_year_months = df_fund_last_year.iloc[:, 0].dropna().unique()
+            for month_val in last_year_months:
+                month_str = str(int(month_val)) if isinstance(month_val, (int, float)) else str(month_val)
+                if len(month_str) == 6 and month_str.isdigit():
+                    month_mask = df_fund_last_year.iloc[:, 0] == month_val
+                    equity_sum = df_fund_last_year.loc[month_mask, h_col].sum()
+                    if d_col is not None and e_col is not None:
+                        net_deposit_sum = df_fund_last_year.loc[month_mask, d_col].sum() - df_fund_last_year.loc[month_mask, e_col].sum()
+                    else:
+                        net_deposit_sum = None
+                    if f_col is not None:
+                        fee_sum = df_fund_last_year.loc[month_mask, f_col].sum()
+                    else:
+                        fee_sum = None
+                    if g_col is not None and j_col is not None and k_col is not None:
+                        pnl_sum = (df_fund_last_year.loc[month_mask, g_col].sum() + 
+                                  df_fund_last_year.loc[month_mask, j_col].sum() - 
+                                  df_fund_last_year.loc[month_mask, k_col].sum())
+                    else:
+                        pnl_sum = None
+                    if pd.notna(equity_sum) and equity_sum != 0:
+                        last_year_data.append({
+                            '月份': month_str,
+                            '期末权益': equity_sum,
+                            '净入金': net_deposit_sum if net_deposit_sum is not None else 0,
+                            '留存手续费': fee_sum if fee_sum is not None else 0,
+                            '平仓盈亏': pnl_sum if pnl_sum is not None else 0,
+                            '类型': '去年'
+                        })
+            
+            all_fund_data = current_data + last_year_data
+            
+            if all_fund_data:
+                fund_df = pd.DataFrame(all_fund_data)
+                
+                # ===== 表格 =====
+                display_df = fund_df[['月份', '期末权益', '净入金', '留存手续费', '平仓盈亏', '类型']].copy()
+                current_display = display_df[display_df['类型'] == '今年'][['月份', '期末权益', '净入金', '留存手续费', '平仓盈亏']].copy()
+                current_display['类型'] = '今年'
+                last_display = display_df[display_df['类型'] == '去年'][['月份', '期末权益', '净入金', '留存手续费', '平仓盈亏']].copy()
+                last_display['类型'] = '去年'
+                
+                merged_display = pd.concat([current_display, last_display], ignore_index=True)
+                merged_display = merged_display.sort_values('月份', ascending=False)
+                merged_display = merged_display[['月份', '期末权益', '净入金', '留存手续费', '平仓盈亏']]
+                
+                merged_display['期末权益'] = (merged_display['期末权益'] / 100000000).round(2)
+                merged_display['净入金'] = (merged_display['净入金'] / 10000000).round(2)
+                merged_display['留存手续费'] = (merged_display['留存手续费'] / 100000).round(2)
+                merged_display['平仓盈亏'] = (merged_display['平仓盈亏'] / 1000000).round(2)
+                merged_display.columns = ['月份', '期末权益（亿元）', '净入金（千万）', '留存手续费（十万）', '平仓盈亏（百万）']
+                
+                st.dataframe(merged_display, use_container_width=True, hide_index=True)
+                
+                # ============================================================
+                # 累计值计算
+                # ============================================================
+                if selected_month:
+                    selected_year = int(str(selected_month)[:4])
+                    current_year = datetime.datetime.now().year
+                    
+                    if selected_year == current_year:
+                        target_data = fund_df[fund_df['类型'] == '今年'].copy()
+                    else:
+                        target_data = fund_df[fund_df['类型'] == '去年'].copy()
+                else:
+                    target_data = fund_df[fund_df['类型'] == '今年'].copy()
+                
+                if not target_data.empty:
+                    target_data['月份'] = target_data['月份'].astype(str)
+                    current_equity_cumsum = target_data['期末权益'].sum() / 100000000
+                    current_deposit_cumsum = target_data['净入金'].sum() / 10000000
+                    current_fee_cumsum = target_data['留存手续费'].sum() / 100000
+                    current_pnl_cumsum = target_data['平仓盈亏'].sum() / 1000000
+                    
+                    if selected_month:
+                        selected_month_str = str(selected_month)
+                        target_filtered = target_data[target_data['月份'] <= selected_month_str]
+                        if not target_filtered.empty:
+                            current_equity_cumsum = target_filtered['期末权益'].sum() / 100000000
+                            current_deposit_cumsum = target_filtered['净入金'].sum() / 10000000
+                            current_fee_cumsum = target_filtered['留存手续费'].sum() / 100000
+                            current_pnl_cumsum = target_filtered['平仓盈亏'].sum() / 1000000
+                else:
+                    current_equity_cumsum = 0
+                    current_deposit_cumsum = 0
+                    current_fee_cumsum = 0
+                    current_pnl_cumsum = 0
+                
+                # ---- 计算期末权益的当期值、环比和同比 ----
+                current_equity_value = None
+                current_type = "无数据"
+                mom_change = None
+                yoy_change = None
+                
+                if selected_month:
+                    current_month_data = fund_df[(fund_df['月份'] == selected_month) & (fund_df['类型'] == '今年')]
+                    if current_month_data.empty:
+                        current_month_data = fund_df[(fund_df['月份'] == selected_month) & (fund_df['类型'] == '去年')]
+                    
+                    month_num = int(selected_month[4:6])
+                    year_num = int(selected_month[:4])
+                    prev_month_str = f"{year_num}{month_num - 1:02d}" if month_num > 1 else f"{year_num - 1}12"
+                    prev_month_data = fund_df[(fund_df['月份'] == prev_month_str) & (fund_df['类型'] == '今年')]
+                    
+                    if not current_month_data.empty:
+                        current_equity_value = current_month_data['期末权益'].iloc[0] / 100000000
+                        if not fund_df[(fund_df['月份'] == selected_month) & (fund_df['类型'] == '今年')].empty:
+                            current_type = "今年"
+                        else:
+                            current_type = "去年"
+                    
+                    if not prev_month_data.empty:
+                        prev_equity_value = prev_month_data['期末权益'].iloc[0] / 100000000
+                    else:
+                        prev_equity_value = None
+                    
+                    if current_equity_value is not None and prev_equity_value is not None and prev_equity_value != 0:
+                        mom_change = (current_equity_value - prev_equity_value) / prev_equity_value * 100
+                    
+                    if current_equity_value is not None:
+                        selected_year = int(selected_month[:4])
+                        selected_month_num = selected_month[4:6]
+                        last_year_month_str = f"{selected_year - 1}{selected_month_num}"
+                        last_year_month_data = fund_df[(fund_df['月份'] == last_year_month_str) & (fund_df['类型'] == '去年')]
+                        if not last_year_month_data.empty:
+                            last_year_equity_value = last_year_month_data['期末权益'].iloc[0] / 100000000
+                            if last_year_equity_value != 0:
+                                yoy_change = (current_equity_value - last_year_equity_value) / last_year_equity_value * 100
+                
+                # ===== 四个折线图 2x2 =====
+                fund_df_sorted = fund_df.sort_values('月份')
+                fund_df_sorted['月份显示'] = fund_df_sorted['月份'].str[4:6]
+                fund_df_sorted['期末权益（亿元）'] = (fund_df_sorted['期末权益'] / 100000000).round(2)
+                fund_df_sorted['净入金（千万）'] = (fund_df_sorted['净入金'] / 10000000).round(2)
+                fund_df_sorted['留存手续费（十万）'] = (fund_df_sorted['留存手续费'] / 100000).round(2)
+                fund_df_sorted['平仓盈亏（百万）'] = (fund_df_sorted['平仓盈亏'] / 1000000).round(2)
+                
+                row1_col1, row1_col2 = st.columns(2)
+                row2_col1, row2_col2 = st.columns(2)
+                
+                color_map = {'今年': '#2E86C1', '去年': '#F39C12'}
+                
+                # 图1：期末权益
+                with row1_col1:
+                    equity_annotation_text = f"{current_type}当期: {current_equity_value:.2f}亿" if current_equity_value is not None else "当期: -"
+                    if mom_change is not None:
+                        equity_annotation_text += f"<br>环比: {mom_change:+.2f}%"
+                    else:
+                        equity_annotation_text += "<br>环比: -"
+                    if yoy_change is not None:
+                        equity_annotation_text += f"<br>同比: {yoy_change:+.2f}%"
+                    else:
+                        equity_annotation_text += "<br>同比: -"
+                    
+                    fig_equity = px.line(
+                        fund_df_sorted,
+                        x='月份显示',
+                        y='期末权益（亿元）',
+                        color='类型',
+                        title='期末权益',
+                        labels={'月份显示': '月份', '期末权益（亿元）': '亿元', '类型': ''},
+                        markers=True,
+                        color_discrete_map=color_map
+                    )
+                    fig_equity.update_layout(
+                        title_font=dict(size=14, color='#1A5276'),
+                        font=dict(size=11),
+                        plot_bgcolor='#F8F9F9',
+                        paper_bgcolor='white',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                        height=350,
+                        annotations=[
+                            dict(
+                                x=0.98,
+                                y=0.98,
+                                xref='paper',
+                                yref='paper',
+                                text=equity_annotation_text,
+                                showarrow=False,
+                                font=dict(size=10, color='#1A5276'),
+                                bgcolor='rgba(255,255,255,0.85)',
+                                bordercolor='#1A5276',
+                                borderwidth=1,
+                                borderpad=4,
+                                xanchor='right',
+                                yanchor='top'
+                            )
+                        ]
+                    )
+                    fig_equity.update_traces(
+                        texttemplate='%{y:.2f}',
+                        textposition='top center',
+                        textfont=dict(size=8),
+                        mode='lines+markers+text'
+                    )
+                    st.plotly_chart(fig_equity, use_container_width=True, config={'displayModeBar': False})
+                
+                # 图2：净入金
+                with row1_col2:
+                    fig_deposit = px.line(
+                        fund_df_sorted,
+                        x='月份显示',
+                        y='净入金（千万）',
+                        color='类型',
+                        title='净入金',
+                        labels={'月份显示': '月份', '净入金（千万）': '千万', '类型': ''},
+                        markers=True,
+                        color_discrete_map=color_map
+                    )
+                    fig_deposit.update_layout(
+                        title_font=dict(size=14, color='#1A5276'),
+                        font=dict(size=11),
+                        plot_bgcolor='#F8F9F9',
+                        paper_bgcolor='white',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                        height=350,
+                        annotations=[
+                            dict(
+                                x=0.98,
+                                y=0.98,
+                                xref='paper',
+                                yref='paper',
+                                text=f'累计: {current_deposit_cumsum:+.2f}千万',
+                                showarrow=False,
+                                font=dict(size=11, color='#1A5276'),
+                                bgcolor='rgba(255,255,255,0.85)',
+                                bordercolor='#1A5276',
+                                borderwidth=1,
+                                borderpad=4,
+                                xanchor='right',
+                                yanchor='top'
+                            )
+                        ]
+                    )
+                    fig_deposit.update_traces(
+                        texttemplate='%{y:.2f}',
+                        textposition='top center',
+                        textfont=dict(size=8),
+                        mode='lines+markers+text'
+                    )
+                    st.plotly_chart(fig_deposit, use_container_width=True, config={'displayModeBar': False})
+                
+                # 图3：留存手续费
+                with row2_col1:
+                    fig_fee = px.line(
+                        fund_df_sorted,
+                        x='月份显示',
+                        y='留存手续费（十万）',
+                        color='类型',
+                        title='留存手续费',
+                        labels={'月份显示': '月份', '留存手续费（十万）': '十万', '类型': ''},
+                        markers=True,
+                        color_discrete_map=color_map
+                    )
+                    fig_fee.update_layout(
+                        title_font=dict(size=14, color='#1A5276'),
+                        font=dict(size=11),
+                        plot_bgcolor='#F8F9F9',
+                        paper_bgcolor='white',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                        height=350,
+                        annotations=[
+                            dict(
+                                x=0.98,
+                                y=0.98,
+                                xref='paper',
+                                yref='paper',
+                                text=f'累计: {current_fee_cumsum:.2f}十万',
+                                showarrow=False,
+                                font=dict(size=11, color='#1A5276'),
+                                bgcolor='rgba(255,255,255,0.85)',
+                                bordercolor='#1A5276',
+                                borderwidth=1,
+                                borderpad=4,
+                                xanchor='right',
+                                yanchor='top'
+                            )
+                        ]
+                    )
+                    fig_fee.update_traces(
+                        texttemplate='%{y:.2f}',
+                        textposition='top center',
+                        textfont=dict(size=8),
+                        mode='lines+markers+text'
+                    )
+                    st.plotly_chart(fig_fee, use_container_width=True, config={'displayModeBar': False})
+                
+                # 图4：平仓盈亏
+                with row2_col2:
+                    fig_pnl = px.line(
+                        fund_df_sorted,
+                        x='月份显示',
+                        y='平仓盈亏（百万）',
+                        color='类型',
+                        title='平仓盈亏',
+                        labels={'月份显示': '月份', '平仓盈亏（百万）': '百万', '类型': ''},
+                        markers=True,
+                        color_discrete_map=color_map
+                    )
+                    fig_pnl.update_layout(
+                        title_font=dict(size=14, color='#1A5276'),
+                        font=dict(size=11),
+                        plot_bgcolor='#F8F9F9',
+                        paper_bgcolor='white',
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                        height=350,
+                        annotations=[
+                            dict(
+                                x=0.98,
+                                y=0.98,
+                                xref='paper',
+                                yref='paper',
+                                text=f'累计: {current_pnl_cumsum:+.2f}百万',
+                                showarrow=False,
+                                font=dict(size=11, color='#1A5276'),
+                                bgcolor='rgba(255,255,255,0.85)',
+                                bordercolor='#1A5276',
+                                borderwidth=1,
+                                borderpad=4,
+                                xanchor='right',
+                                yanchor='top'
+                            )
+                        ]
+                    )
+                    fig_pnl.update_traces(
+                        texttemplate='%{y:.2f}',
+                        textposition='top center',
+                        textfont=dict(size=8),
+                        mode='lines+markers+text'
+                    )
+                    st.plotly_chart(fig_pnl, use_container_width=True, config={'displayModeBar': False})
+                
+                # ============================================================
+                # 第5-6个图：盈利客户数 + 交易客户数（1x2 并排）
+                # ============================================================
+                st.subheader("📊 客户情况统计")
+                
+                # ---- 获取交易统计表列名 ----
+                trade_month_col = '月份' if '月份' in df_trade_stats.columns else df_trade_stats.columns[0] if not df_trade_stats.empty else '月份'
+                trade_investor_col = '投资者代码' if '投资者代码' in df_trade_stats.columns else df_trade_stats.columns[3] if not df_trade_stats.empty else '投资者代码'
+                trade_f_col = '平仓盈亏' if '平仓盈亏' in df_trade_stats.columns else df_trade_stats.columns[5] if len(df_trade_stats.columns) > 5 else None
+                trade_g_col = '权利金收入' if '权利金收入' in df_trade_stats.columns else df_trade_stats.columns[6] if len(df_trade_stats.columns) > 6 else None
+                trade_h_col = '权利金支出' if '权利金支出' in df_trade_stats.columns else df_trade_stats.columns[7] if len(df_trade_stats.columns) > 7 else None
+                
+                # ---- 按月份统计交易客户数和盈利客户数（从交易统计表-月） ----
+                customer_data = []
+                
+                if not df_trade_stats.empty:
+                    # 获取所有月份
+                    all_trade_months = []
+                    for m in df_trade_stats[trade_month_col].dropna().unique():
+                        m_str = str(int(m)) if isinstance(m, (int, float)) else str(m)
+                        if len(m_str) == 6 and m_str.isdigit():
+                            all_trade_months.append(m_str)
+                    all_trade_months = sorted(set(all_trade_months))
+                    
+                    for month_str in all_trade_months:
+                        # 筛选该月份数据
+                        month_mask = df_trade_stats[trade_month_col].apply(
+                            lambda x: str(int(x)) if isinstance(x, (int, float)) else str(x)
+                        ) == month_str
+                        month_df = df_trade_stats[month_mask]
+                        
+                        if not month_df.empty:
+                            # 交易客户数：该月所有投资者代码去重
+                            total_investors = month_df[trade_investor_col].nunique()
+                            
+                            # 盈利客户数：f+g-h > 0 的投资者代码去重
+                            if trade_f_col is not None and trade_g_col is not None and trade_h_col is not None:
+                                month_df['平仓盈亏_计算'] = month_df[trade_f_col] + month_df[trade_g_col] - month_df[trade_h_col]
+                                profit_df = month_df[month_df['平仓盈亏_计算'] > 0]
+                                profit_investors = profit_df[trade_investor_col].nunique()
+                            else:
+                                profit_investors = 0
+                            
+                            # 判断今年还是去年
+                            year = int(month_str[:4])
+                            current_year = datetime.datetime.now().year
+                            type_label = '今年' if year == current_year else '去年'
+                            
+                            customer_data.append({
+                                '月份': month_str,
+                                '交易客户数': total_investors,
+                                '盈利客户数': profit_investors,
+                                '类型': type_label
+                            })
+                
+                if customer_data:
+                    customer_df = pd.DataFrame(customer_data)
+                    customer_df = customer_df.sort_values('月份')
+                    customer_df['月份显示'] = customer_df['月份'].astype(str).str[4:6]
+                    
+                    # ---- 计算累计值（只计算今年的累计） ----
+                    if selected_month:
+                        selected_month_str = str(selected_month)
+                        current_customer = customer_df[(customer_df['类型'] == '今年') & (customer_df['月份'] <= selected_month_str)]
+                        current_total_cumsum = current_customer['交易客户数'].sum() if not current_customer.empty else 0
+                        current_profit_cumsum = current_customer['盈利客户数'].sum() if not current_customer.empty else 0
+                    else:
+                        current_customer = customer_df[customer_df['类型'] == '今年']
+                        current_total_cumsum = current_customer['交易客户数'].sum() if not current_customer.empty else 0
+                        current_profit_cumsum = current_customer['盈利客户数'].sum() if not current_customer.empty else 0
+                    
+                    # ---- 只保留今年的数据用于折线图 ----
+                    customer_df = customer_df[customer_df['类型'] == '今年']
+                    
+                    # ===== 1x2 布局 =====
+                    col_left, col_right = st.columns(2)
+                    
+                    # 左列：盈利客户数
+                    with col_left:
+                        profit_plot_df = customer_df[['月份显示', '盈利客户数']].copy()
+                        profit_plot_df = profit_plot_df.rename(columns={'盈利客户数': '客户数'})
+                        
+                        fig_profit = px.line(
+                            profit_plot_df,
+                            x='月份显示',
+                            y='客户数',
+                            title='盈利客户数',
+                            labels={'月份显示': '月份', '客户数': '客户数'},
+                            markers=True,
+                            color_discrete_map={'今年': '#2E86C1'}
+                        )
+                        fig_profit.update_traces(line=dict(color='#2E86C1'), marker=dict(color='#2E86C1'))
+                        fig_profit.update_layout(
+                            title_font=dict(size=14, color='#1A5276'),
+                            font=dict(size=11),
+                            plot_bgcolor='#F8F9F9',
+                            paper_bgcolor='white',
+                            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                            height=350,
+                            annotations=[
+                                dict(
+                                    x=0.98,
+                                    y=0.98,
+                                    xref='paper',
+                                    yref='paper',
+                                    text=f'累计: {current_profit_cumsum}',
+                                    showarrow=False,
+                                    font=dict(size=11, color='#1A5276'),
+                                    bgcolor='rgba(255,255,255,0.85)',
+                                    bordercolor='#1A5276',
+                                    borderwidth=1,
+                                    borderpad=4,
+                                    xanchor='right',
+                                    yanchor='top'
+                                )
+                            ]
+                        )
+                        fig_profit.update_traces(
+                            texttemplate='%{y:.0f}',
+                            textposition='top center',
+                            textfont=dict(size=8),
+                            mode='lines+markers+text'
+                        )
+                        st.plotly_chart(fig_profit, use_container_width=True, config={'displayModeBar': False})
+                    
+                    # 右列：交易客户数
+                    with col_right:
+                        trade_plot_df = customer_df[['月份显示', '交易客户数']].copy()
+                        trade_plot_df = trade_plot_df.rename(columns={'交易客户数': '客户数'})
+                        
+                        fig_total = px.line(
+                            trade_plot_df,
+                            x='月份显示',
+                            y='客户数',
+                            title='交易客户数',
+                            labels={'月份显示': '月份', '客户数': '客户数'},
+                            markers=True,
+                            color_discrete_map={'今年': '#2E86C1'}
+                        )
+                        fig_total.update_traces(line=dict(color='#2E86C1'), marker=dict(color='#2E86C1'))
+                        fig_total.update_layout(
+                            title_font=dict(size=14, color='#1A5276'),
+                            font=dict(size=11),
+                            plot_bgcolor='#F8F9F9',
+                            paper_bgcolor='white',
+                            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                            height=350,
+                            annotations=[
+                                dict(
+                                    x=0.98,
+                                    y=0.98,
+                                    xref='paper',
+                                    yref='paper',
+                                    text=f'累计: {current_total_cumsum}',
+                                    showarrow=False,
+                                    font=dict(size=11, color='#1A5276'),
+                                    bgcolor='rgba(255,255,255,0.85)',
+                                    bordercolor='#1A5276',
+                                    borderwidth=1,
+                                    borderpad=4,
+                                    xanchor='right',
+                                    yanchor='top'
+                                )
+                            ]
+                        )
+                        fig_total.update_traces(
+                            texttemplate='%{y:.0f}',
+                            textposition='top center',
+                            textfont=dict(size=8),
+                            mode='lines+markers+text'
+                        )
+                        st.plotly_chart(fig_total, use_container_width=True, config={'displayModeBar': False})
+                else:
+                    st.info("暂无客户数据")
+            else:
+                st.info("暂无资金对账数据")
+        else:
+            st.warning("未找到期末权益列（H列），请检查数据格式")
+    except Exception as e:
+        st.warning(f"加载资金对账表时出错: {e}")
+
+    # ============================================================
+    # 15. 交易统计表-月 - 部门交易客户数
+    # ============================================================
+    st.subheader("📊 部门交易客户数统计")
+    
+    try:
+        # 加载交易统计表
+        df_trade_stats = data_dict['trade_stats']
+        
+        # 清理数据
+        df_trade_stats = df_trade_stats.loc[:, ~df_trade_stats.columns.isna()]
+        df_trade_stats = df_trade_stats.loc[:, df_trade_stats.columns != '']
+        df_trade_stats = df_trade_stats.loc[:, ~df_trade_stats.columns.duplicated()]
+        df_trade_stats = df_trade_stats.dropna(axis=1, how='all')
+        
+        # 加载资金对账表-月
+        df_fund_current = data_dict['fund_current']
+        df_fund_current = df_fund_current.loc[:, ~df_fund_current.columns.isna()]
+        df_fund_current = df_fund_current.loc[:, df_fund_current.columns != '']
+        df_fund_current = df_fund_current.loc[:, ~df_fund_current.columns.duplicated()]
+        df_fund_current = df_fund_current.dropna(axis=1, how='all')
+        
+        # ---- 获取交易统计表列名 ----
+        trade_month_col = '月份'
+        trade_dept_col = '部门'
+        trade_investor_col = '投资者代码'
+        trade_f_col = '平仓盈亏' if '平仓盈亏' in df_trade_stats.columns else df_trade_stats.columns[5]
+        trade_g_col = '权利金收入' if '权利金收入' in df_trade_stats.columns else df_trade_stats.columns[6]
+        trade_h_col = '权利金支出' if '权利金支出' in df_trade_stats.columns else df_trade_stats.columns[7]
+        
+        # ---- 获取资金对账表列名 ----
+        fund_month_col = '月份'
+        if '部门' in df_fund_current.columns:
+            fund_dept_col = '部门'
+        elif '部门名称' in df_fund_current.columns:
+            fund_dept_col = '部门名称'
+        else:
+            fund_dept_col = df_fund_current.columns[2]
+        
+        fund_e_col = '入金' if '入金' in df_fund_current.columns else df_fund_current.columns[3]
+        fund_f_col = '出金' if '出金' in df_fund_current.columns else df_fund_current.columns[4]
+        fund_g_col = '留存手续费' if '留存手续费' in df_fund_current.columns else df_fund_current.columns[5]
+        fund_i_col = '期末权益' if '期末权益' in df_fund_current.columns else df_fund_current.columns[8]
+        
+        # ---- 月份筛选器 ----
+        all_months = []
+        if not df_trade_stats.empty:
+            for m in df_trade_stats[trade_month_col].dropna().unique():
+                m_str = str(int(m)) if isinstance(m, (int, float)) else str(m)
+                if len(m_str) == 6 and m_str.isdigit():
+                    all_months.append(m_str)
+        all_months = sorted(set(all_months), reverse=True)
+        
+        if not all_months:
+            st.info("暂无交易统计表数据")
+        else:
+            selected_month = st.selectbox(
+                "选择月份",
+                options=all_months,
+                format_func=lambda x: f"{x[:4]}年{x[4:6]}月",
+                key="trade_month_selector"
+            )
+            
+            # ---- 筛选交易统计表数据 ----
+            df_trade_stats['月份_str'] = df_trade_stats[trade_month_col].apply(
+                lambda x: str(int(x)) if isinstance(x, (int, float)) else str(x)
+            )
+            filtered_trade = df_trade_stats[df_trade_stats['月份_str'] == selected_month].copy()
+            
+            if filtered_trade.empty:
+                st.info(f"{selected_month} 无交易数据")
+            else:
+                # ---- 筛选资金对账表数据 ----
+                df_fund_current['月份_str'] = df_fund_current[fund_month_col].apply(
+                    lambda x: str(int(x)) if isinstance(x, (int, float)) else str(x)
+                )
+                filtered_fund = df_fund_current[df_fund_current['月份_str'] == selected_month].copy()
+                
+                # ---- 按部门汇总资金对账表数据 ----
+                if not filtered_fund.empty:
+                    filtered_fund['净入金'] = filtered_fund[fund_e_col] - filtered_fund[fund_f_col]
+                    filtered_fund['留存手续费'] = filtered_fund[fund_g_col]
+                    filtered_fund['期末权益'] = filtered_fund[fund_i_col]
+                    
+                    fund_by_dept = filtered_fund.groupby(fund_dept_col).agg({
+                        '净入金': 'sum',
+                        '留存手续费': 'sum',
+                        '期末权益': 'sum'
+                    }).reset_index()
+                    fund_by_dept.columns = ['部门', '净入金', '留存手续费', '期末权益']
+                else:
+                    fund_by_dept = pd.DataFrame(columns=['部门', '净入金', '留存手续费', '期末权益'])
+                
+                # ---- 按部门统计交易统计表数据 ----
+                # 1. 有交易客户数
+                result_df = filtered_trade.groupby(trade_dept_col).agg(
+                    有交易客户数=(trade_investor_col, 'nunique')
+                ).reset_index()
+                result_df.columns = ['部门', '有交易客户数']
+                
+                # 2. 盈利客户数：f+g-h > 0 的投资者代码去重个数
+                filtered_trade['平仓盈亏_计算'] = filtered_trade[trade_f_col] + filtered_trade[trade_g_col] - filtered_trade[trade_h_col]
+                profit_df = filtered_trade[filtered_trade['平仓盈亏_计算'] > 0]
+                profit_count_df = profit_df.groupby(trade_dept_col).agg(
+                    盈利客户数=(trade_investor_col, 'nunique')
+                ).reset_index()
+                profit_count_df.columns = ['部门', '盈利客户数']
+                result_df = pd.merge(result_df, profit_count_df, on='部门', how='left').fillna(0)
+                
+                # 3. 平仓盈亏 = F列(平仓盈亏) + G列(权利金收入) - H列(权利金支出)
+                pnl_df = filtered_trade.groupby(trade_dept_col).apply(
+                    lambda x: (x[trade_f_col].sum() + x[trade_g_col].sum() - x[trade_h_col].sum())
+                ).reset_index()
+                pnl_df.columns = ['部门', '平仓盈亏']
+                result_df = pd.merge(result_df, pnl_df, on='部门', how='left')
+                
+                # ---- 合并资金对账表数据 ----
+                result_df = pd.merge(result_df, fund_by_dept, on='部门', how='left').fillna(0)
+                
+                # ---- 计算盈利面 ----
+                result_df['盈利面'] = (result_df['盈利客户数'] / result_df['有交易客户数'] * 100).round(2)
+                
+                # ---- 添加排名 ----
+                result_df['期末权益排名'] = result_df['期末权益'].rank(method='min', ascending=False).astype(int)
+                result_df['平仓盈亏排名'] = result_df['平仓盈亏'].rank(method='min', ascending=False).astype(int)
+                result_df['净入金排名'] = result_df['净入金'].rank(method='min', ascending=False).astype(int)
+                result_df['留存手续费排名'] = result_df['留存手续费'].rank(method='min', ascending=False).astype(int)
+                
+                # ---- 重新排列列顺序 ----
+                result_df = result_df[[
+                    '部门',
+                    '有交易客户数',
+                    '盈利客户数',
+                    '盈利面',
+                    '期末权益',
+                    '期末权益排名',
+                    '平仓盈亏',
+                    '平仓盈亏排名',
+                    '净入金',
+                    '净入金排名',
+                    '留存手续费',
+                    '留存手续费排名'
+                ]]
+                
+                # ---- 排序 ----
+                result_df = result_df.sort_values('有交易客户数', ascending=False)
+                
+                # ---- 格式化 ----
+                result_df['期末权益'] = result_df['期末权益'].apply(lambda x: f"{int(x):,}")
+                result_df['平仓盈亏'] = result_df['平仓盈亏'].apply(lambda x: f"{int(x):,}")
+                result_df['净入金'] = result_df['净入金'].apply(lambda x: f"{int(x):,}")
+                result_df['留存手续费'] = result_df['留存手续费'].apply(lambda x: f"{int(x):,}")
+                result_df['盈利面'] = result_df['盈利面'].apply(lambda x: f"{x:.2f}%")
+                
+                # ---- 显示结果 ----
+                st.subheader(f"📊 {selected_month[:4]}年{selected_month[4:6]}月 部门统计")
+                st.dataframe(result_df, use_container_width=True, hide_index=True)
+                
+                # ---- 汇总信息 ----
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("部门总数", len(result_df))
+                with col2:
+                    st.metric("客户总数（去重）", int(result_df['有交易客户数'].sum()))
+    except Exception as e:
+        st.warning(f"加载数据时出错: {e}")
+
+    # ============================================================
+    # 导出报告
+    # ============================================================
+    st.markdown("---")
+    st.subheader("📥 导出报告")
+    
+    def generate_excel_report():
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            summary_data = {
+                '指标': [
+                    '报告生成时间',
+                    '数据类型',
+                    '分析期间-交易所',
+                    f'{metric_name}总计（市场）-交易所',
+                    f'{metric_name}总计（公司）-交易所',
+                    '分析期间-板块',
+                    f'{metric_name}总计（市场）-板块',
+                    f'{metric_name}总计（公司）-板块'
+                ],
+                '数值': [
+                    datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    data_type,
+                    selected_label_exchange,
+                    f"{total_current_exchange:.2f}",
+                    f"{total_current_exchange_company:.2f}",
+                    selected_label_group,
+                    f"{total_current_group:.2f}",
+                    f"{total_current_group_company:.2f}"
+                ]
+            }
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_excel(writer, sheet_name='报告摘要', index=False)
+            
+            if not exchange_df_plot.empty:
+                exchange_df_plot.to_excel(writer, sheet_name=f'{metric_name}交易所对比-市场', index=False)
+                table_df_exchange.to_excel(writer, sheet_name='交易所环比同比综合表-市场', index=False)
+            
+            if not exchange_df_plot_company.empty:
+                exchange_df_plot_company.to_excel(writer, sheet_name=f'{metric_name}交易所对比-公司', index=False)
+                table_df_exchange_company.to_excel(writer, sheet_name='交易所环比同比综合表-公司', index=False)
+            
+            if not group_df_plot.empty:
+                group_df_plot.to_excel(writer, sheet_name=f'{metric_name}板块对比-市场', index=False)
+                table_df_group.to_excel(writer, sheet_name='板块环比同比综合表-市场', index=False)
+            
+            if not group_df_plot_company.empty:
+                group_df_plot_company.to_excel(writer, sheet_name=f'{metric_name}板块对比-公司', index=False)
+                table_df_group_company.to_excel(writer, sheet_name='板块环比同比综合表-公司', index=False)
+            
+            filtered_df.head(100).to_excel(writer, sheet_name='筛选后数据', index=False)
+        return output.getvalue()
+    
     excel_data = generate_excel_report()
     st.download_button(
         label=f"📥 下载{data_type}报告",
