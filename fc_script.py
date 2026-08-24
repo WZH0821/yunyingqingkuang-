@@ -7,8 +7,6 @@ import requests
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
-st.title("📊 交易数据看板")
-
 # ============================================================
 # 配置 - 你的GitHub信息
 # ============================================================
@@ -17,27 +15,169 @@ GITHUB_REPO = "yunyingqingkuang-"
 GITHUB_BRANCH = "main"
 EXCEL_FILENAME = "data1.xlsx"
 
-# 构建GitHub原始文件URL
 GITHUB_FILE_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME}"
 
 # ============================================================
-# 缓存数据加载函数
+# 常量定义
+# ============================================================
+COLOR_MAP = {
+    '本月': '#2E86C1', '上月': '#F39C12', '去年同期': '#28B463',
+    '本季度': '#2E86C1', '上季度': '#F39C12',
+    '今年': '#2E86C1', '去年': '#F39C12',
+}
+
+MONTH_NAMES = {1: '1月', 2: '2月', 3: '3月', 4: '4月', 5: '5月', 6: '6月',
+               7: '7月', 8: '8月', 9: '9月', 10: '10月', 11: '11月', 12: '12月'}
+
+# ============================================================
+# 工具函数
+# ============================================================
+def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.loc[:, ~df.columns.isna()]
+    df = df.loc[:, df.columns != '']
+    df = df.loc[:, ~df.columns.duplicated()]
+    return df.dropna(axis=1, how='all')
+
+def parse_month_column(col):
+    col_str = str(col)
+    if len(col_str) == 6 and col_str.isdigit():
+        year, month = int(col_str[:4]), int(col_str[4:6])
+        if 1 <= month <= 12:
+            return year, month
+    return None, None
+
+def get_month_columns(df: pd.DataFrame) -> list:
+    if df.empty:
+        return []
+    return [col for col in df.columns if parse_month_column(col)[0] is not None]
+
+def safe_division(a, b, default=0):
+    return default if (b is None or b == 0) else a / b
+
+def format_percent(value, decimals=2):
+    if value is None or pd.isna(value):
+        return '-'
+    return f"{value:+.{decimals}f}%"
+
+def get_metric_config(data_type: str) -> dict:
+    METRIC_CONFIG = {
+        '成交量': {
+            'market_divide': 100000000, 'market_unit': '亿手', 'market_title': '（亿手）',
+            'market_yaxis': '成交量（亿手）', 'company_divide': 10000, 'company_unit': '万手',
+            'company_title': '（万手）', 'company_yaxis': '成交量（万手）', 'metric_name': '成交量'
+        },
+        '成交额': {
+            'market_divide': 10000, 'market_unit': '万亿元', 'market_title': '（万亿元）',
+            'market_yaxis': '成交额（万亿元）', 'company_divide': 100000000, 'company_unit': '亿元',
+            'company_title': '（亿元）', 'company_yaxis': '成交额（亿元）', 'metric_name': '成交额'
+        },
+        '持仓量': {
+            'market_divide': 1000000, 'market_unit': '百万手', 'market_title': '（百万手）',
+            'market_yaxis': '持仓量（百万手）', 'company_divide': 10000, 'company_unit': '万手',
+            'company_title': '（万手）', 'company_yaxis': '持仓量（万手）', 'metric_name': '持仓量'
+        }
+    }
+    return METRIC_CONFIG.get(data_type, METRIC_CONFIG['成交量'])
+
+def safe_get_column(df: pd.DataFrame, col_names: list, default_idx: int = None):
+    if df.empty:
+        return None
+    for name in col_names:
+        if name in df.columns:
+            return name
+    if default_idx is not None and len(df.columns) > default_idx:
+        return df.columns[default_idx]
+    return None
+
+def compute_period_comparison(df: pd.DataFrame, selected_cols: list, prev_cols: list, 
+                               last_year_cols: list, divide: float) -> dict:
+    result = {
+        'current': df[selected_cols].sum().sum() / divide if selected_cols else 0,
+        'prev': df[prev_cols].sum().sum() / divide if prev_cols else None,
+        'last_year': df[last_year_cols].sum().sum() / divide if last_year_cols else None
+    }
+    result['mom'] = safe_division(result['current'] - result['prev'], result['prev']) * 100 if result['prev'] is not None else None
+    result['yoy'] = safe_division(result['current'] - result['last_year'], result['last_year']) * 100 if result['last_year'] is not None else None
+    return result
+
+def build_comparison_table(df: pd.DataFrame, group_col: str, groups: list,
+                           selected_cols: list, prev_cols: list, last_year_cols: list,
+                           divide: float, current_label: str, prev_label: str, last_year_label: str) -> pd.DataFrame:
+    rows = []
+    for group in groups:
+        group_df = df[df[group_col] == group]
+        row = {group_col: group}
+        current_val = group_df[selected_cols].sum().sum() / divide if selected_cols else 0
+        row[current_label] = current_val
+        
+        if prev_cols:
+            prev_val = group_df[prev_cols].sum().sum() / divide if prev_cols else None
+            row[prev_label] = prev_val if prev_val is not None else None
+            row['环比'] = safe_division(current_val - prev_val, prev_val) * 100 if prev_val else None
+        else:
+            row[prev_label] = None
+            row['环比'] = None
+        
+        if last_year_cols and last_year_label:
+            last_val = group_df[last_year_cols].sum().sum() / divide if last_year_cols else None
+            row[last_year_label] = last_val if last_val is not None else None
+            row['同比'] = safe_division(current_val - last_val, last_val) * 100 if last_val else None
+        else:
+            row[last_year_label] = None if last_year_label else None
+            row['同比'] = None
+        
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+def create_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, color_col: str,
+                     title: str, yaxis_title: str, color_discrete_map: dict):
+    if df.empty:
+        return None
+    fig = px.bar(df, x=x_col, y=y_col, color=color_col, barmode='group',
+                 title=title, labels={y_col: yaxis_title, x_col: x_col},
+                 text_auto='.2f', color_discrete_map=color_discrete_map)
+    fig.update_layout(
+        title_font=dict(size=18, color='#1A5276'), font=dict(size=13),
+        bargap=0.25, bargroupgap=0.15,
+        plot_bgcolor='#F8F9F9', paper_bgcolor='white',
+        legend_title_text='', yaxis=dict(tickformat='.2f', title=yaxis_title)
+    )
+    fig.update_traces(texttemplate='%{y:.2f}', textfont=dict(size=11, color='black', family='Arial Black'),
+                      textposition='outside')
+    return fig
+
+def create_line_chart(df: pd.DataFrame, x: str, y: str, color: str,
+                      title: str, xlabel: str = '', ylabel: str = '',
+                      color_map: dict = None, text_format: str = '.2f'):
+    if df.empty:
+        return None
+    fig = px.line(df, x=x, y=y, color=color, title=title,
+                  labels={x: xlabel, y: ylabel, color: ''},
+                  markers=True, color_discrete_map=color_map)
+    fig.update_layout(
+        title_font=dict(size=14, color='#1A5276'), font=dict(size=11),
+        plot_bgcolor='#F8F9F9', paper_bgcolor='white',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+        height=350
+    )
+    fig.update_traces(texttemplate=f'%{{y:{text_format}}}', textposition='top center',
+                      textfont=dict(size=8), mode='lines+markers+text')
+    return fig
+
+# ============================================================
+# 缓存数据加载函数 - 从GitHub加载
 # ============================================================
 @st.cache_data(ttl=3600)
 def load_all_data_from_github():
-    """
-    从GitHub仓库加载所有Excel数据
-    """
     try:
-        # 1. 从GitHub下载文件
         with st.spinner(f"📥 正在从GitHub下载 {EXCEL_FILENAME}..."):
             response = requests.get(GITHUB_FILE_URL, timeout=30)
             response.raise_for_status()
         
-        # 2. 将下载的内容转为BytesIO对象
         excel_data = BytesIO(response.content)
         
-        # 3. 定义需要加载的所有sheet名称
         sheets_config = {
             'vol_market': '成交量-市场',
             'vol_company': '成交量-公司',
@@ -50,21 +190,16 @@ def load_all_data_from_github():
             'trade_stats': '交易统计表-月'
         }
         
-        # 4. 加载所有sheet
         data = {}
         for key, sheet_name in sheets_config.items():
             try:
                 excel_data.seek(0)
                 df = pd.read_excel(excel_data, sheet_name=sheet_name, header=0)
-                # 清理数据
-                df = df.loc[:, ~df.columns.isna()]
-                df = df.loc[:, df.columns != '']
-                df = df.loc[:, ~df.columns.duplicated()]
-                df = df.dropna(axis=1, how='all')
+                df = clean_dataframe(df)
                 data[key] = df
             except Exception as e:
                 st.warning(f"⚠️ 加载sheet '{sheet_name}' 失败: {e}")
-                data[key] = None
+                data[key] = pd.DataFrame()
         
         return data
     
@@ -97,7 +232,7 @@ df_fund_last_year = data_dict['fund_last_year']
 df_trade_stats = data_dict['trade_stats']
 
 # 检查核心数据
-if df_vol_market is None:
+if df_vol_market.empty:
     st.error("❌ 核心数据加载失败，请检查Excel文件是否包含所有必需的sheet")
     st.stop()
 
@@ -120,232 +255,378 @@ with st.sidebar:
         st.rerun()
 
 # ============================================================
-# 以下是你原有的数据分析代码（完全保持不变）
+# 数据筛选
 # ============================================================
 try:
-    # 加载所有数据
-    sheets = {
-        '成交量-市场': '成交量-市场', '成交量-公司': '成交量-公司',
-        '成交额-市场': '成交额-市场', '成交额-公司': '成交额-公司',
-        '持仓量-市场': '持仓量-市场', '持仓量-公司': '持仓量-公司',
-        '资金对账表-月': '资金对账表-月', '上一年资金对账表-月': '上一年资金对账表-月',
-        '交易统计表-月': '交易统计表-月'
-    }
-    data_cache = {}
-    for key, sheet in sheets.items():
-        try:
-            data_cache[key] = load_data(uploaded_file, sheet)
-        except Exception:
-            data_cache[key] = pd.DataFrame()
-
-    # 提取各个DataFrame
-    df_vol_market, df_vol_company = data_cache['成交量-市场'], data_cache['成交量-公司']
-    df_amt_market, df_amt_company = data_cache['成交额-市场'], data_cache['成交额-公司']
-    df_oi_market, df_oi_company = data_cache['持仓量-市场'], data_cache['持仓量-公司']
-    df_fund_current, df_fund_last_year = data_cache['资金对账表-月'], data_cache['上一年资金对账表-月']
-    df_trade_stats = data_cache['交易统计表-月']
-
-    available_sheets = {k: v for k, v in data_cache.items() if not v.empty}
-    if not available_sheets:
-        st.error("❌ 没有可用的数据表")
-        st.stop()
-
-    st.title("📊 交易数据看板")
-
+    df = df_vol_market.copy()
+    df = clean_dataframe(df)
+    
+    st.success(f"✅ 数据加载成功！共 {len(df)} 行，{len(df.columns)} 列")
+    st.dataframe(df.head(10))
+    
+    with st.expander("📌 查看所有列名"):
+        st.write(df.columns.tolist())
+    
     # ============================================================
-    # 数据筛选
+    # 筛选器
     # ============================================================
-    st.subheader("📋 数据筛选")
-    col_sheet, col_month_start, col_month_end = st.columns([2, 1.5, 1.5])
-
-    with col_sheet:
-        selected_sheet = st.selectbox("选择数据表", options=list(available_sheets.keys()), key="sheet_selector")
-
-    df = available_sheets[selected_sheet].copy()
-    month_cols = get_month_columns(df)
-
-    month_filter_applied = False
-    selected_months = month_cols
-
-    if month_cols:
-        month_cols_sorted = sorted(month_cols)
-        month_labels = {col: f"{str(col)[:4]}年{str(col)[4:6]}月" for col in month_cols_sorted}
-
-        with col_month_start:
-            selected_month_start = st.selectbox("开始月份", options=month_cols_sorted,
-                                                format_func=lambda x: month_labels.get(x, str(x)),
-                                                index=0, key="month_start")
-        with col_month_end:
-            selected_month_end = st.selectbox("结束月份", options=month_cols_sorted,
-                                              format_func=lambda x: month_labels.get(x, str(x)),
-                                              index=len(month_cols_sorted) - 1, key="month_end")
-
-        if selected_month_start and selected_month_end:
-            start_idx = month_cols_sorted.index(selected_month_start)
-            end_idx = month_cols_sorted.index(selected_month_end)
-            if start_idx <= end_idx:
-                selected_months = month_cols_sorted[start_idx:end_idx + 1]
-                month_filter_applied = True
-            else:
-                st.warning("⚠️ 开始月份不能晚于结束月份")
-
-    # 文本筛选
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
     filter_cols = [col for col in df.columns if col not in numeric_cols]
+    
     selected_filters = {}
-
     if filter_cols:
-        st.markdown("**文本筛选条件**")
         cols = st.columns(3)
         for idx, col_name in enumerate(filter_cols):
             with cols[idx % 3]:
                 unique_vals = df[col_name].dropna().unique().tolist()
                 if unique_vals:
-                    selected = st.multiselect(f"{col_name}", options=unique_vals, default=[], key=f"filter_{col_name}")
+                    selected = st.multiselect(f"筛选 {col_name}", options=unique_vals, default=[], key=f"filter_{col_name}")
                     if selected:
                         selected_filters[col_name] = selected
-
-    # 应用筛选
+    
     filtered_df = df.copy()
     for col, vals in selected_filters.items():
-        filtered_df = filtered_df[filtered_df[col].isin(vals)]
-
-    if month_filter_applied and selected_months:
-        non_month_cols = [col for col in filtered_df.columns if col not in month_cols]
-        filtered_df = filtered_df[non_month_cols + selected_months]
-
-    # 显示数据
-    st.success(f"✅ 当前查看: {selected_sheet}，共 {len(filtered_df)} 行，{len(filtered_df.columns)} 列")
-    df_display = filtered_df.reset_index(drop=True)
-    df_display.index = df_display.index + 1
-
-    numeric_cols_display = df_display.select_dtypes(include=['number']).columns.tolist()
-    sum_row = {col: '' for col in df_display.columns}
-    for col in numeric_cols_display:
-        sum_row[col] = df_display[col].sum()
-    sum_row[df_display.columns[0]] = '【总和】'
-    df_with_sum = pd.concat([df_display, pd.DataFrame([sum_row])], ignore_index=True)
-    st.dataframe(df_with_sum, use_container_width=True, height=400)
-
-    # ============================================================
-    # 各交易所柱状图
-    # ============================================================
-    st.subheader(f"📊 各交易所情况（市场）")
-
-    # 定义数据映射
-    df_detail_map = {'成交量': df_vol_market, '成交额': df_amt_market, '持仓量': df_oi_market}
-    df_company_map = {'成交量': df_vol_company, '成交额': df_amt_company, '持仓量': df_oi_company}
-
-    # 筛选器：数据类型和月份并列在一行
-    col_filter1, col_filter2 = st.columns(2)
-    with col_filter1:
-        data_type = st.selectbox(
-            "选择数据类型", 
-            options=['成交量', '成交额', '持仓量'],
-            key="data_type"
-        )
+        if vals:
+            filtered_df = filtered_df[filtered_df[col].isin(vals)]
     
-    # 获取当前数据类型的DataFrame
-    df_detail = df_detail_map.get(data_type, pd.DataFrame())
+    st.subheader("📊 筛选后数据")
+    
+    # ============================================================
+    # 选择数据类型
+    # ============================================================
+    data_type = st.radio(
+        "选择数据类型",
+        options=['成交量', '成交额', '持仓量'],
+        horizontal=True,
+        key="data_type"
+    )
+    
+    metric_config = get_metric_config(data_type)
+    
+    # 获取对应的数据
+    df_detail = {'成交量': df_vol_market, '成交额': df_amt_market, '持仓量': df_oi_market}.get(data_type, pd.DataFrame())
+    df_company_detail = {'成交量': df_vol_company, '成交额': df_amt_company, '持仓量': df_oi_company}.get(data_type, pd.DataFrame())
+    
+    df_detail = clean_dataframe(df_detail)
+    df_company_detail = clean_dataframe(df_company_detail)
+    
+    st.success(f"✅ {data_type}数据加载成功！共 {len(df_detail)} 行")
+    st.success(f"✅ {data_type}公司数据加载成功！共 {len(df_company_detail)} 行")
+    
+    st.subheader(f"📋 {data_type}数据预览")
+    st.dataframe(df_detail.head(10))
+    
+    with st.expander("📌 查看所有列名"):
+        st.write(df_detail.columns.tolist())
+    
+    # ============================================================
+    # 获取日期列信息
+    # ============================================================
     date_cols = get_month_columns(df_detail)
     
-    with col_filter2:
-        if date_cols:
-            date_cols_sorted = sorted(date_cols)
-            selected_key = st.selectbox(
-                "选择月份", 
-                options=date_cols_sorted,
-                format_func=lambda x: f"{str(x)[:4]}年{str(x)[4:6]}月",
-                index=len(date_cols_sorted) - 1, 
-                key="main_month_selector"
-            )
+    date_labels = {}
+    date_info = {}
+    for col in date_cols:
+        try:
+            col_str = str(col)
+            if len(col_str) == 6 and col_str.isdigit():
+                year = int(col_str[:4])
+                month = int(col_str[4:6])
+                date_labels[col] = f"{year}年{month:02d}月"
+                date_info[col] = {'year': year, 'month': month}
+            else:
+                date_labels[col] = str(col)
+                date_info[col] = {'year': None, 'month': None}
+        except:
+            date_labels[col] = str(col)
+            date_info[col] = {'year': None, 'month': None}
+    
+    # ============================================================
+    # 各交易所柱状图（市场 + 公司）
+    # ============================================================
+    st.subheader(f"📊 各交易所{data_type}对比（市场）{metric_config['market_title']}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        time_dimension_exchange = st.radio(
+            "选择时间维度",
+            options=['月度', '季度', '年度'],
+            horizontal=True,
+            key="time_dimension_exchange"
+        )
+    with col2:
+        if time_dimension_exchange == '月度':
+            options_exchange = sorted(date_cols, reverse=True)
+            option_labels_exchange = {col: date_labels.get(col, str(col)) for col in options_exchange}
+            value_cols_map_exchange = None
+        elif time_dimension_exchange == '季度':
+            quarter_map_exchange = {}
+            for col in date_cols:
+                info = date_info.get(col, {})
+                year = info.get('year')
+                month = info.get('month')
+                if year is not None and month is not None:
+                    if 1 <= month <= 3:
+                        q = 'Q1'
+                    elif 4 <= month <= 6:
+                        q = 'Q2'
+                    elif 7 <= month <= 9:
+                        q = 'Q3'
+                    else:
+                        q = 'Q4'
+                    key = f"{year}{q}"
+                    if key not in quarter_map_exchange:
+                        quarter_map_exchange[key] = []
+                    quarter_map_exchange[key].append(col)
+            options_exchange = sorted(quarter_map_exchange.keys(), reverse=True)
+            option_labels_exchange = {k: f"{k[:4]}年{k[4:]}" for k in options_exchange}
+            value_cols_map_exchange = quarter_map_exchange
         else:
-            selected_key = None
-            st.warning("⚠️ 未找到月份列")
-
-    # 获取配置
-    metric_config = get_metric_config(data_type)
-    df_detail = df_detail_map.get(data_type, pd.DataFrame())
-    df_company_detail = df_company_map.get(data_type, pd.DataFrame())
-
-    if df_detail.empty or df_company_detail.empty:
-        st.warning(f"⚠️ {data_type}数据为空")
-    elif selected_key is None:
-        st.warning("⚠️ 请选择有效的月份")
+            year_map_exchange = {}
+            for col in date_cols:
+                info = date_info.get(col, {})
+                year = info.get('year')
+                if year is not None:
+                    key = str(year)
+                    if key not in year_map_exchange:
+                        year_map_exchange[key] = []
+                    year_map_exchange[key].append(col)
+            options_exchange = sorted(year_map_exchange.keys(), reverse=True)
+            option_labels_exchange = {k: f"{k}年" for k in options_exchange}
+            value_cols_map_exchange = year_map_exchange
+        
+        selected_key_exchange = st.selectbox(
+            f"选择{time_dimension_exchange}",
+            options=options_exchange,
+            format_func=lambda x: option_labels_exchange.get(x, str(x)),
+            key="time_selector_exchange"
+        )
+    
+    if time_dimension_exchange == '月度':
+        selected_cols_exchange = [selected_key_exchange]
+        selected_label_exchange = option_labels_exchange.get(selected_key_exchange, str(selected_key_exchange))
     else:
-        st.success(f"✅ {data_type}数据加载成功！市场 {len(df_detail)} 行，公司 {len(df_company_detail)} 行")
-
-        selected_label = f"{str(selected_key)[:4]}年{str(selected_key)[4:6]}月"
-
-        # 计算前后期
-        year, month = parse_month_column(selected_key)
-        prev_cols, last_year_cols = [], []
-        if year and month:
-            prev_key = f"{year if month > 1 else year - 1}{month - 1 if month > 1 else 12:02d}"
+        selected_cols_exchange = value_cols_map_exchange.get(selected_key_exchange, [])
+        selected_label_exchange = option_labels_exchange.get(selected_key_exchange, str(selected_key_exchange))
+    
+    # 计算前后期
+    if time_dimension_exchange == '月度':
+        col_str = str(selected_key_exchange)
+        if len(col_str) == 6 and col_str.isdigit():
+            year = int(col_str[:4])
+            month = int(col_str[4:6])
+            prev_year = year
+            prev_month = month - 1
+            if prev_month == 0:
+                prev_month = 12
+                prev_year -= 1
+            prev_key = f"{prev_year}{prev_month:02d}"
             prev_key = int(prev_key) if prev_key.isdigit() else prev_key
-            prev_cols = [prev_key] if prev_key in df_detail.columns else []
-            last_key = f"{year - 1}{month:02d}"
-            last_key = int(last_key) if last_key.isdigit() else last_key
-            last_year_cols = [last_key] if last_key in df_detail.columns else []
-
-        selected_cols = [selected_key]
-
-        exchanges = df_detail['交易所'].unique().tolist()
+            prev_cols_exchange = [prev_key] if prev_key in df_detail.columns else []
+            last_year_key = f"{year - 1}{month:02d}"
+            last_year_key = int(last_year_key) if last_year_key.isdigit() else last_year_key
+            last_year_cols_exchange = [last_year_key] if last_year_key in df_detail.columns else []
+        else:
+            prev_cols_exchange = []
+            last_year_cols_exchange = []
+    elif time_dimension_exchange == '季度':
+        key_str = str(selected_key_exchange)
+        year = int(key_str[:4])
+        q = key_str[4:]
+        q_num = {'Q1': 1, 'Q2': 2, 'Q3': 3, 'Q4': 4}[q]
+        prev_q_num = q_num - 1
+        prev_year = year
+        if prev_q_num == 0:
+            prev_q_num = 4
+            prev_year -= 1
+        prev_q = ['Q1', 'Q2', 'Q3', 'Q4'][prev_q_num - 1]
+        prev_key = f"{prev_year}{prev_q}"
+        prev_cols_exchange = value_cols_map_exchange.get(prev_key, []) if value_cols_map_exchange else []
+        last_year_key = f"{year - 1}{q}"
+        last_year_cols_exchange = value_cols_map_exchange.get(last_year_key, []) if value_cols_map_exchange else []
+    else:
+        prev_year = int(selected_key_exchange) - 1
+        prev_key = str(prev_year)
+        prev_cols_exchange = value_cols_map_exchange.get(prev_key, []) if value_cols_map_exchange else []
+        last_year_cols_exchange = []
+    
+    # ===== 市场交易所数据 =====
+    exchanges = df_detail['交易所'].unique().tolist() if '交易所' in df_detail.columns else []
+    
+    exchange_compare = []
+    current_sum_exchange = df_detail[selected_cols_exchange].sum().sum() if selected_cols_exchange else 0
+    total_current_exchange = current_sum_exchange / metric_config['market_divide']
+    
+    total_prev_exchange = None
+    if prev_cols_exchange:
+        prev_sum = df_detail[prev_cols_exchange].sum().sum() if prev_cols_exchange else 0
+        total_prev_exchange = prev_sum / metric_config['market_divide']
+    
+    total_last_year_exchange = None
+    if last_year_cols_exchange:
+        last_sum = df_detail[last_year_cols_exchange].sum().sum() if last_year_cols_exchange else 0
+        total_last_year_exchange = last_sum / metric_config['market_divide']
+    
+    for exchange in exchanges:
+        exchange_df = df_detail[df_detail['交易所'] == exchange]
+        row = {'交易所': exchange}
+        current_val = exchange_df[selected_cols_exchange].sum().sum() / metric_config['market_divide'] if selected_cols_exchange else 0
+        row['本月'] = current_val
         
-        # 市场数据
-        exchange_df = build_comparison_table(df_detail, '交易所', exchanges, selected_cols, prev_cols, last_year_cols,
-                                             metric_config['market_divide'], '本月', '上月', '去年同期')
+        if prev_cols_exchange:
+            prev_val = exchange_df[prev_cols_exchange].sum().sum() / metric_config['market_divide'] if prev_cols_exchange else 0
+            row['上月'] = prev_val
+            row['环比'] = safe_division(current_val - prev_val, prev_val) * 100 if prev_val else None
+        else:
+            row['上月'] = None
+            row['环比'] = None
         
-        # 公司数据
-        exchange_company_df = build_comparison_table(df_company_detail, '交易所', exchanges, selected_cols, prev_cols, last_year_cols,
-                                                     metric_config['company_divide'], '本月', '上月', '去年同期')
-
-        # 总览统计
-        market_total = compute_period_comparison(df_detail, selected_cols, prev_cols, last_year_cols, metric_config['market_divide'])
-        company_total = compute_period_comparison(df_company_detail, selected_cols, prev_cols, last_year_cols, metric_config['company_divide'])
-
-        # 绘制柱状图
-        value_cols = ['本月']
-        if prev_cols:
-            value_cols.append('上月')
-        if last_year_cols:
-            value_cols.append('去年同期')
-
-        for df_plot, suffix, divide, yaxis in [
-            (exchange_df, '市场', metric_config['market_divide'], metric_config['market_yaxis']),
-            (exchange_company_df, '公司', metric_config['company_divide'], metric_config['company_yaxis'])
-        ]:
-            melted = df_plot.melt(id_vars=['交易所'], value_vars=value_cols, var_name='期间', value_name=data_type)
-            melted = melted.dropna(subset=[data_type])
-            period_order = [p for p in ['上月', '本月', '去年同期'] if p in melted['期间'].unique()]
-            melted['期间'] = pd.Categorical(melted['期间'], categories=period_order, ordered=True)
-            melted = melted.sort_values('期间')
-
-            if not melted.empty:
-                fig = create_bar_chart(melted, '交易所', data_type, '期间',
-                                       f'各交易所{data_type}对比（{suffix}）- {selected_label}',
-                                       yaxis, COLOR_MAP)
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
-
-                # 综合表
-                st.subheader(f"📊 交易所环比同比综合表（{suffix}）")
-                total = market_total if suffix == '市场' else company_total
-                table_data = [{
-                    '维度': '市场',
-                    f'{data_type}（{metric_config["market_unit" if suffix == "市场" else "company_unit"]}）': f"{total['current']:.2f}",
-                    '环比（%）': format_percent(total['mom']),
-                    '同比（%）': format_percent(total['yoy'])
-                }]
-                for _, row in df_plot.iterrows():
-                    table_data.append({
-                        '维度': row['交易所'],
-                        f'{data_type}（{metric_config["market_unit" if suffix == "市场" else "company_unit"]}）': f"{row['本月']:.2f}",
-                        '环比（%）': format_percent(row.get('环比')),
-                        '同比（%）': format_percent(row.get('同比'))
-                    })
-                st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
-
+        if last_year_cols_exchange:
+            last_val = exchange_df[last_year_cols_exchange].sum().sum() / metric_config['market_divide'] if last_year_cols_exchange else 0
+            row['去年同期'] = last_val
+            row['同比'] = safe_division(current_val - last_val, last_val) * 100 if last_val else None
+        else:
+            row['去年同期'] = None
+            row['同比'] = None
+        
+        exchange_compare.append(row)
+    
+    exchange_df_plot = pd.DataFrame(exchange_compare)
+    
+    # ===== 公司交易所数据 =====
+    exchange_compare_company = []
+    current_sum_exchange_company = df_company_detail[selected_cols_exchange].sum().sum() if selected_cols_exchange else 0
+    total_current_exchange_company = current_sum_exchange_company / metric_config['company_divide']
+    
+    total_prev_exchange_company = None
+    if prev_cols_exchange:
+        prev_sum = df_company_detail[prev_cols_exchange].sum().sum() if prev_cols_exchange else 0
+        total_prev_exchange_company = prev_sum / metric_config['company_divide']
+    
+    total_last_year_exchange_company = None
+    if last_year_cols_exchange:
+        last_sum = df_company_detail[last_year_cols_exchange].sum().sum() if last_year_cols_exchange else 0
+        total_last_year_exchange_company = last_sum / metric_config['company_divide']
+    
+    for exchange in exchanges:
+        exchange_df = df_company_detail[df_company_detail['交易所'] == exchange]
+        row = {'交易所': exchange}
+        current_val = exchange_df[selected_cols_exchange].sum().sum() / metric_config['company_divide'] if selected_cols_exchange else 0
+        row['本月'] = current_val
+        
+        if prev_cols_exchange:
+            prev_val = exchange_df[prev_cols_exchange].sum().sum() / metric_config['company_divide'] if prev_cols_exchange else 0
+            row['上月'] = prev_val
+            row['环比'] = safe_division(current_val - prev_val, prev_val) * 100 if prev_val else None
+        else:
+            row['上月'] = None
+            row['环比'] = None
+        
+        if last_year_cols_exchange:
+            last_val = exchange_df[last_year_cols_exchange].sum().sum() / metric_config['company_divide'] if last_year_cols_exchange else 0
+            row['去年同期'] = last_val
+            row['同比'] = safe_division(current_val - last_val, last_val) * 100 if last_val else None
+        else:
+            row['去年同期'] = None
+            row['同比'] = None
+        
+        exchange_compare_company.append(row)
+    
+    exchange_df_plot_company = pd.DataFrame(exchange_compare_company)
+    
+    # ===== 绘制柱状图 =====
+    value_cols_exchange = ['本月']
+    if prev_cols_exchange:
+        value_cols_exchange.append('上月')
+    if last_year_cols_exchange:
+        value_cols_exchange.append('去年同期')
+    
+    if not exchange_df_plot.empty:
+        exchange_melted = exchange_df_plot.melt(
+            id_vars=['交易所'],
+            value_vars=value_cols_exchange,
+            var_name='期间',
+            value_name=data_type
+        )
+        exchange_melted = exchange_melted.dropna(subset=[data_type])
+        period_order = ['上月', '本月', '去年同期']
+        exchange_melted['期间'] = pd.Categorical(
+            exchange_melted['期间'],
+            categories=[p for p in period_order if p in exchange_melted['期间'].unique()],
+            ordered=True
+        )
+        exchange_melted = exchange_melted.sort_values('期间')
+        
+        if not exchange_melted.empty:
+            fig = create_bar_chart(
+                exchange_melted, '交易所', data_type, '期间',
+                f'各交易所{data_type}对比（市场）- {selected_label_exchange}',
+                metric_config['market_yaxis'], COLOR_MAP
+            )
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # 综合表
+            st.subheader("📊 交易所环比同比综合表（市场）")
+            table_data = [{
+                '维度': '市场',
+                f'{data_type}（{metric_config["market_unit"]}）': f"{total_current_exchange:.2f}",
+                '环比（%）': format_percent((total_current_exchange - total_prev_exchange) / total_prev_exchange * 100 if total_prev_exchange else None),
+                '同比（%）': format_percent((total_current_exchange - total_last_year_exchange) / total_last_year_exchange * 100 if total_last_year_exchange else None)
+            }]
+            for _, row in exchange_df_plot.iterrows():
+                table_data.append({
+                    '维度': row['交易所'],
+                    f'{data_type}（{metric_config["market_unit"]}）': f"{row['本月']:.2f}",
+                    '环比（%）': format_percent(row.get('环比')),
+                    '同比（%）': format_percent(row.get('同比'))
+                })
+            st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+    
+    # ===== 公司柱状图 =====
+    st.subheader(f"📊 各交易所{data_type}对比（公司）{metric_config['company_title']}")
+    
+    if not exchange_df_plot_company.empty:
+        exchange_melted_company = exchange_df_plot_company.melt(
+            id_vars=['交易所'],
+            value_vars=value_cols_exchange,
+            var_name='期间',
+            value_name=data_type
+        )
+        exchange_melted_company = exchange_melted_company.dropna(subset=[data_type])
+        period_order = ['上月', '本月', '去年同期']
+        exchange_melted_company['期间'] = pd.Categorical(
+            exchange_melted_company['期间'],
+            categories=[p for p in period_order if p in exchange_melted_company['期间'].unique()],
+            ordered=True
+        )
+        exchange_melted_company = exchange_melted_company.sort_values('期间')
+        
+        if not exchange_melted_company.empty:
+            fig = create_bar_chart(
+                exchange_melted_company, '交易所', data_type, '期间',
+                f'各交易所{data_type}对比（公司）- {selected_label_exchange}',
+                metric_config['company_yaxis'], COLOR_MAP
+            )
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            
+            st.subheader("📊 交易所环比同比综合表（公司）")
+            table_data = [{
+                '维度': '市场',
+                f'{data_type}（{metric_config["company_unit"]}）': f"{total_current_exchange_company:.2f}",
+                '环比（%）': format_percent((total_current_exchange_company - total_prev_exchange_company) / total_prev_exchange_company * 100 if total_prev_exchange_company else None),
+                '同比（%）': format_percent((total_current_exchange_company - total_last_year_exchange_company) / total_last_year_exchange_company * 100 if total_last_year_exchange_company else None)
+            }]
+            for _, row in exchange_df_plot_company.iterrows():
+                table_data.append({
+                    '维度': row['交易所'],
+                    f'{data_type}（{metric_config["company_unit"]}）': f"{row['本月']:.2f}",
+                    '环比（%）': format_percent(row.get('环比')),
+                    '同比（%）': format_percent(row.get('同比'))
+                })
+            st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+    
     # ============================================================
     # 公司占市场比重（整体）
     # ============================================================
@@ -726,9 +1007,8 @@ try:
 
                     st.subheader("📊 客户情况统计")
                     try:
-                        df_trade_last = data_cache.get('上一年交易统计表-月', pd.DataFrame())
                         trade_customer_data = []
-                        for df_trade, year_type in [(df_trade_stats, '今年'), (df_trade_last, '去年')]:
+                        for df_trade, year_type in [(df_trade_stats, '今年')]:
                             if df_trade.empty:
                                 continue
                             month_col = safe_get_column(df_trade, ['月份'], 0)
@@ -900,6 +1180,8 @@ try:
         except Exception as e:
             st.warning(f"加载部门统计时出错: {e}")
             st.exception(e)
+
+    st.success("✅ 所有分析已完成！")
 
 except Exception as e:
     st.error(f"❌ 处理数据时出错: {e}")
