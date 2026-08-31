@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from typing import Dict, List, Optional, Tuple
 import requests
+from io import BytesIO
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
