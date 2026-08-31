@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 from typing import Dict, List, Optional, Tuple
 import requests
-from io import BytesIO
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
@@ -12,25 +11,11 @@ st.set_page_config(page_title="Dashboard", layout="wide")
 # ============================================================
 GITHUB_USERNAME = "WZH0821"
 GITHUB_REPO = "yunyingqingkuang-"
+GITHUB_BRANCH = "main"
 EXCEL_FILENAME = "data1.xlsx"
 
-GITHUB_FILE_URL = f"https://github.com/{GITHUB_USERNAME}/{GITHUB_REPO}/releases/latest/download/{EXCEL_FILENAME}"
-# ============================================================
+GITHUB_FILE_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME}"
 
-@st.cache_data(ttl=3600)
-def load_data():
-    resp = requests.get(GITHUB_FILE_URL, headers={"User-Agent": "Mozilla/5.0"})
-    resp.raise_for_status()
-    df = pd.read_excel(BytesIO(resp.content))
-    return df
-
-#加载数据
-try:
-    df = load_data()
-    st.success("✅ 底稿读取成功")
-except Exception as e:
-    st.error(f"读取失败：{e}")
-    
 # ============================================================
 # 配置常量
 # ============================================================
