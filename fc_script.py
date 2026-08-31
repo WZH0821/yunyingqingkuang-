@@ -14,7 +14,22 @@ GITHUB_REPO = "yunyingqingkuang-"
 EXCEL_FILENAME = "data1.xlsx"
 
 GITHUB_FILE_URL = f"https://github.com/{GITHUB_USERNAME}/{GITHUB_REPO}/releases/latest/download/{EXCEL_FILENAME}"
+# ============================================================
 
+@st.cache_data(ttl=3600)
+def load_data():
+    resp = requests.get(GITHUB_FILE_URL, headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
+    df = pd.read_excel(BytesIO(resp.content))
+    return df
+
+#加载数据
+try:
+    df = load_data()
+    st.success("✅ 底稿读取成功")
+except Exception as e:
+    st.error(f"读取失败：{e}")
+    
 # ============================================================
 # 配置常量
 # ============================================================
