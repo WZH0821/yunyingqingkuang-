@@ -11,12 +11,9 @@ st.set_page_config(page_title="Dashboard", layout="wide")
 # ============================================================
 GITHUB_USERNAME = "WZH0821"
 GITHUB_REPO = "yunyingqingkuang-"
-GITHUB_BRANCH = "main"
-EXCEL_FILENAME_1 = "data1.xlsx"
-EXCEL_FILENAME_2 = "data2.xlsx"
+EXCEL_FILENAME = "data1.xlsx"
 
-GITHUB_FILE_URL_1 = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME_1}"
-GITHUB_FILE_URL_2 = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME_2}"
+GITHUB_FILE_URL = f"https://github.com/{GITHUB_USERNAME}/{GITHUB_REPO}/releases/latest/download/{EXCEL_FILENAME}"
 
 # ============================================================
 # 配置常量
@@ -202,7 +199,7 @@ def load_data_from_github(url: str):
         # 检查文件是否存在
         response = requests.head(url, timeout=10)
         if response.status_code != 200:
-            st.error(f"❌ 无法从GitHub获取数据文件: {url.split('/')[-1]}")
+            st.error(f"❌ 无法从GitHub获取数据文件: {EXCEL_FILENAME}")
             st.info(f"请检查文件路径: {url}")
             return None
         
@@ -221,7 +218,7 @@ def load_data_from_github(url: str):
 # ============================================================
 with st.sidebar:
     st.header("📊 数据源")
-    st.info(f"📁 数据文件: {EXCEL_FILENAME_1} 和 {EXCEL_FILENAME_2}")
+    st.info(f"📁 数据文件: {EXCEL_FILENAME}")
     st.caption(f"📅 最后更新: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
     st.divider()
     
@@ -239,33 +236,20 @@ with st.sidebar:
 # ============================================================
 # 从GitHub加载数据
 with st.spinner('📥 正在从GitHub加载数据文件...'):
-    df_excel_1 = load_data_from_github(GITHUB_FILE_URL_1)
-    df_excel_2 = load_data_from_github(GITHUB_FILE_URL_2)
+    df_excel = load_data_from_github(GITHUB_FILE_URL)
 
-if df_excel_1 is None and df_excel_2 is None:
+if df_excel is None:
     st.error("❌ 无法加载数据，请检查网络连接和文件路径")
     st.stop()
 
-# 合并两个Excel的数据
-df_excel = {}
-if df_excel_1:
-    df_excel.update(df_excel_1)
-if df_excel_2:
-    df_excel.update(df_excel_2)
-
 try:
-    # data1.xlsx 包含的sheet: 成交量-市场、成交额-市场、持仓量-市场、成交量-公司、成交额-公司、持仓量-公司、资金对账表-月
-    # data2.xlsx 包含的sheet: 上一年资金对账表-月、交易统计表-月、上一年交易统计表-月、投资者资料查询、活跃客户、市场权益
     sheets = {
         '成交量-市场': '成交量-市场', '成交量-公司': '成交量-公司',
         '成交额-市场': '成交额-市场', '成交额-公司': '成交额-公司',
         '持仓量-市场': '持仓量-市场', '持仓量-公司': '持仓量-公司',
-        '资金对账表-月': '资金对账表-月',
-        '上一年资金对账表-月': '上一年资金对账表-月',
-        '交易统计表-月': '交易统计表-月', 
-        '上一年交易统计表-月': '上一年交易统计表-月',
-        '投资者资料查询': '投资者资料查询', 
-        '活跃客户': '活跃客户',
+        '资金对账表-月': '资金对账表-月', '上一年资金对账表-月': '上一年资金对账表-月',
+        '交易统计表-月': '交易统计表-月', '上一年交易统计表-月': '上一年交易统计表-月',
+        '投资者资料查询': '投资者资料查询', '活跃客户': '活跃客户',
         '市场权益': '市场权益'
     }
     
