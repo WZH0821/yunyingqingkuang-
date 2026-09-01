@@ -3,21 +3,20 @@ import pandas as pd
 import plotly.express as px
 from typing import Dict, List, Optional, Tuple
 import requests
-from io import BytesIO
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
 # ============================================================
-# 配置 - GitHub信息
+# 配置 - 你的GitHub信息
 # ============================================================
 GITHUB_USERNAME = "WZH0821"
 GITHUB_REPO = "yunyingqingkuang-"
 GITHUB_BRANCH = "main"
-EXCEL_DATA1 = "data1.xlsx"
-EXCEL_DATA2 = "data2.xlsx"
+EXCEL_FILENAME_DATA1 = "data1.xlsx"
+EXCEL_FILENAME_DATA2 = "data2.xlsx"
 
-GITHUB_DATA1_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_DATA1}"
-GITHUB_DATA2_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_DATA2}"
+GITHUB_FILE_URL_DATA1 = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME_DATA1}"
+GITHUB_FILE_URL_DATA2 = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME_DATA2}"
 
 # ============================================================
 # 配置常量
@@ -92,16 +91,6 @@ def safe_get_column(df: pd.DataFrame, col_names: List[str], default_idx: int = N
     if default_idx is not None and len(df.columns) > default_idx:
         return df.columns[default_idx]
     return None
-
-@st.cache_data
-def load_data(uploaded_file, sheet_name):
-    if uploaded_file is None:
-        return pd.DataFrame()
-    if uploaded_file.name.endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, header=0)
-    else:
-        df = pd.read_csv(uploaded_file)
-    return clean_dataframe(df)
 
 def normalize_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -210,14 +199,12 @@ def create_line_chart(df: pd.DataFrame, x: str, y: str, color: str,
 def load_data_from_github(url: str):
     """从GitHub加载Excel数据"""
     try:
-        # 检查文件是否存在
         response = requests.head(url, timeout=10)
         if response.status_code != 200:
-            st.error(f"❌ 无法从GitHub获取数据文件: {EXCEL_FILENAME}")
+            st.error(f"❌ 无法从GitHub获取数据文件")
             st.info(f"请检查文件路径: {url}")
             return None
         
-        # 加载Excel文件的所有sheet
         df_excel = pd.read_excel(url, sheet_name=None, header=0)
         return df_excel
     except requests.exceptions.RequestException as e:
@@ -232,11 +219,11 @@ def load_data_from_github(url: str):
 # ============================================================
 with st.sidebar:
     st.header("📊 数据源")
-    st.info(f"📁 数据文件: {EXCEL_FILENAME}")
+    st.info(f"📁 Data1: {EXCEL_FILENAME_DATA1}")
+    st.info(f"📁 Data2: {EXCEL_FILENAME_DATA2}")
     st.caption(f"📅 最后更新: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
     st.divider()
     
-    # 添加刷新按钮
     if st.button("🔄 刷新数据"):
         st.cache_data.clear()
         st.rerun()
@@ -248,14 +235,13 @@ with st.sidebar:
 # ============================================================
 # 主逻辑
 # ============================================================
-if not uploaded_file_data1 and not uploaded_file_data2:
-    st.info("👈 请从左侧上传 Data1 和 Data2 数据文件")
-    st.stop()
+with st.spinner('📥 正在从GitHub加载数据文件...'):
+    df_excel_data1 = load_data_from_github(GITHUB_FILE_URL_DATA1)
+    df_excel_data2 = load_data_from_github(GITHUB_FILE_URL_DATA2)
 
-if not uploaded_file_data1:
-    st.warning("⚠️ 请上传 Data1 文件（包含成交量、成交额、持仓量、资金对账表数据）")
-if not uploaded_file_data2:
-    st.warning("⚠️ 请上传 Data2 文件（包含上一年资金、交易、投资者、活跃客户、市场权益数据）")
+if df_excel_data1 is None and df_excel_data2 is None:
+    st.error("❌ 无法加载数据，请检查网络连接和文件路径")
+    st.stop()
 
 try:
     # ============================================================
@@ -268,10 +254,13 @@ try:
         '资金对账表-月': '资金对账表-月',
     }
     data1_cache = {}
-    if uploaded_file_data1:
+    if df_excel_data1 is not None:
         for key, sheet in data1_sheets.items():
             try:
-                data1_cache[key] = load_data(uploaded_file_data1, sheet)
+                if sheet in df_excel_data1:
+                    data1_cache[key] = clean_dataframe(df_excel_data1[sheet])
+                else:
+                    data1_cache[key] = pd.DataFrame()
             except Exception:
                 data1_cache[key] = pd.DataFrame()
     else:
@@ -279,7 +268,7 @@ try:
             data1_cache[key] = pd.DataFrame()
 
     # ============================================================
-    # Data2 - 业务数据加载（不包含资金对账表-月）
+    # Data2 - 业务数据加载
     # ============================================================
     data2_sheets = {
         '上一年资金对账表-月': '上一年资金对账表-月',
@@ -288,10 +277,13 @@ try:
         '市场权益': '市场权益'
     }
     data2_cache = {}
-    if uploaded_file_data2:
+    if df_excel_data2 is not None:
         for key, sheet in data2_sheets.items():
             try:
-                data2_cache[key] = load_data(uploaded_file_data2, sheet)
+                if sheet in df_excel_data2:
+                    data2_cache[key] = clean_dataframe(df_excel_data2[sheet])
+                else:
+                    data2_cache[key] = pd.DataFrame()
             except Exception:
                 data2_cache[key] = pd.DataFrame()
     else:
@@ -308,7 +300,7 @@ try:
     df_amt_company = data1_cache['成交额-公司']
     df_oi_market = data1_cache['持仓量-市场']
     df_oi_company = data1_cache['持仓量-公司']
-    df_fund_current = data1_cache['资金对账表-月']  # 资金对账表在 Data1 中
+    df_fund_current = data1_cache['资金对账表-月']
     
     # 从 Data2 提取
     df_fund_last_year = data2_cache['上一年资金对账表-月']
@@ -1040,7 +1032,6 @@ try:
                             pnl_df.columns = ['部门', '平仓盈亏']
                             result = pd.merge(result, pnl_df, on='部门', how='left').fillna(0)
 
-                        # 从 Data1 获取资金对账表
                         if not df_fund_current.empty:
                             fund_dept_col = safe_get_column(df_fund_current, ['部门', '部门名称'], 2)
                             if fund_dept_col:
@@ -1472,7 +1463,6 @@ try:
                         lambda x: f"{x[:4]}年{x[4:6]}月"
                     )
                     
-                    # 资金对账表在 Data1 中
                     df_fund = data1_cache.get('资金对账表-月', pd.DataFrame())
                     df_fund = clean_dataframe(df_fund)
                     
@@ -1784,7 +1774,6 @@ try:
                 else:
                     company_equity_list = []
                     
-                    # 公司权益从 Data1 的资金对账表获取
                     df_fund_current = data1_cache.get('资金对账表-月', pd.DataFrame())
                     df_fund_current = clean_dataframe(df_fund_current)
                     
@@ -1810,7 +1799,6 @@ try:
                             current_equity['公司权益'] = current_equity['公司权益'] / 100000000
                             company_equity_list.append(current_equity)
                     
-                    # 去年公司权益从 Data2 的上一年资金对账表获取
                     df_fund_last = data2_cache.get('上一年资金对账表-月', pd.DataFrame())
                     df_fund_last = clean_dataframe(df_fund_last)
                     
