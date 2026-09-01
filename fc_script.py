@@ -3,18 +3,21 @@ import pandas as pd
 import plotly.express as px
 from typing import Dict, List, Optional, Tuple
 import requests
+from io import BytesIO
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
 # ============================================================
-# 配置 - 你的GitHub信息
+# 配置 - GitHub信息
 # ============================================================
 GITHUB_USERNAME = "WZH0821"
 GITHUB_REPO = "yunyingqingkuang-"
 GITHUB_BRANCH = "main"
-EXCEL_FILENAME = "data1.xlsx"
+EXCEL_DATA1 = "data1.xlsx"
+EXCEL_DATA2 = "data2.xlsx"
 
-GITHUB_FILE_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME}"
+GITHUB_DATA1_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_DATA1}"
+GITHUB_DATA2_URL = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_DATA2}"
 
 # ============================================================
 # 配置常量
@@ -89,6 +92,16 @@ def safe_get_column(df: pd.DataFrame, col_names: List[str], default_idx: int = N
     if default_idx is not None and len(df.columns) > default_idx:
         return df.columns[default_idx]
     return None
+
+@st.cache_data
+def load_data(uploaded_file, sheet_name):
+    if uploaded_file is None:
+        return pd.DataFrame()
+    if uploaded_file.name.endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, header=0)
+    else:
+        df = pd.read_csv(uploaded_file)
+    return clean_dataframe(df)
 
 def normalize_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -235,60 +248,82 @@ with st.sidebar:
 # ============================================================
 # 主逻辑
 # ============================================================
-# 从GitHub加载数据
-with st.spinner('📥 正在从GitHub加载数据文件...'):
-    df_excel = load_data_from_github(GITHUB_FILE_URL)
-
-if df_excel is None:
-    st.error("❌ 无法加载数据，请检查网络连接和文件路径")
+if not uploaded_file_data1 and not uploaded_file_data2:
+    st.info("👈 请从左侧上传 Data1 和 Data2 数据文件")
     st.stop()
 
+if not uploaded_file_data1:
+    st.warning("⚠️ 请上传 Data1 文件（包含成交量、成交额、持仓量、资金对账表数据）")
+if not uploaded_file_data2:
+    st.warning("⚠️ 请上传 Data2 文件（包含上一年资金、交易、投资者、活跃客户、市场权益数据）")
+
 try:
-    sheets = {
+    # ============================================================
+    # Data1 - 市场数据 + 资金对账表加载
+    # ============================================================
+    data1_sheets = {
         '成交量-市场': '成交量-市场', '成交量-公司': '成交量-公司',
         '成交额-市场': '成交额-市场', '成交额-公司': '成交额-公司',
         '持仓量-市场': '持仓量-市场', '持仓量-公司': '持仓量-公司',
-        '资金对账表-月': '资金对账表-月', '上一年资金对账表-月': '上一年资金对账表-月',
+        '资金对账表-月': '资金对账表-月',
+    }
+    data1_cache = {}
+    if uploaded_file_data1:
+        for key, sheet in data1_sheets.items():
+            try:
+                data1_cache[key] = load_data(uploaded_file_data1, sheet)
+            except Exception:
+                data1_cache[key] = pd.DataFrame()
+    else:
+        for key in data1_sheets.keys():
+            data1_cache[key] = pd.DataFrame()
+
+    # ============================================================
+    # Data2 - 业务数据加载（不包含资金对账表-月）
+    # ============================================================
+    data2_sheets = {
+        '上一年资金对账表-月': '上一年资金对账表-月',
         '交易统计表-月': '交易统计表-月', '上一年交易统计表-月': '上一年交易统计表-月',
         '投资者资料查询': '投资者资料查询', '活跃客户': '活跃客户',
         '市场权益': '市场权益'
     }
-    
-    data_cache = {}
-    missing_sheets = []
-    
-    for key, sheet in sheets.items():
-        try:
-            if sheet in df_excel:
-                data_cache[key] = clean_dataframe(df_excel[sheet])
-            else:
-                data_cache[key] = pd.DataFrame()
-                missing_sheets.append(sheet)
-        except Exception as e:
-            data_cache[key] = pd.DataFrame()
-            st.warning(f"⚠️ 加载sheet '{sheet}' 时出错: {e}")
-    
-    if missing_sheets:
-        st.warning(f"⚠️ 以下Sheet不存在于文件中: {', '.join(missing_sheets)}")
+    data2_cache = {}
+    if uploaded_file_data2:
+        for key, sheet in data2_sheets.items():
+            try:
+                data2_cache[key] = load_data(uploaded_file_data2, sheet)
+            except Exception:
+                data2_cache[key] = pd.DataFrame()
+    else:
+        for key in data2_sheets.keys():
+            data2_cache[key] = pd.DataFrame()
 
-    df_vol_market = data_cache['成交量-市场']
-    df_vol_company = data_cache['成交量-公司']
-    df_amt_market = data_cache['成交额-市场']
-    df_amt_company = data_cache['成交额-公司']
-    df_oi_market = data_cache['持仓量-市场']
-    df_oi_company = data_cache['持仓量-公司']
-    df_fund_current = data_cache['资金对账表-月']
-    df_fund_last_year = data_cache['上一年资金对账表-月']
-    df_trade_stats = data_cache['交易统计表-月']
-    df_trade_last = data_cache['上一年交易统计表-月']
-    df_investor = data_cache['投资者资料查询']
-    df_active = data_cache['活跃客户']
-    df_market_equity = data_cache['市场权益']
+    # ============================================================
+    # 从缓存中提取变量
+    # ============================================================
+    # 从 Data1 提取
+    df_vol_market = data1_cache['成交量-市场']
+    df_vol_company = data1_cache['成交量-公司']
+    df_amt_market = data1_cache['成交额-市场']
+    df_amt_company = data1_cache['成交额-公司']
+    df_oi_market = data1_cache['持仓量-市场']
+    df_oi_company = data1_cache['持仓量-公司']
+    df_fund_current = data1_cache['资金对账表-月']  # 资金对账表在 Data1 中
+    
+    # 从 Data2 提取
+    df_fund_last_year = data2_cache['上一年资金对账表-月']
+    df_trade_stats = data2_cache['交易统计表-月']
+    df_trade_last = data2_cache['上一年交易统计表-月']
+    df_investor = data2_cache['投资者资料查询']
+    df_active = data2_cache['活跃客户']
+    df_market_equity = data2_cache['市场权益']
 
     df_trade_stats = normalize_trade_columns(df_trade_stats)
     df_trade_last = normalize_trade_columns(df_trade_last)
 
-    available_sheets = {k: v for k, v in data_cache.items() if not v.empty}
+    # 合并所有可用数据用于数据筛选器
+    all_data = {**data1_cache, **data2_cache}
+    available_sheets = {k: v for k, v in all_data.items() if not v.empty}
     if not available_sheets:
         st.error("❌ 没有可用的数据表")
         st.stop()
@@ -368,7 +403,6 @@ try:
     sum_row[df_display.columns[1]] = '【总和】'
     df_with_sum = pd.concat([df_display, pd.DataFrame([sum_row])], ignore_index=True)
     st.dataframe(df_with_sum, use_container_width=True, height=400, hide_index=True)
-
 
     # ============================================================
     # 各交易所柱状图
@@ -1006,6 +1040,7 @@ try:
                             pnl_df.columns = ['部门', '平仓盈亏']
                             result = pd.merge(result, pnl_df, on='部门', how='left').fillna(0)
 
+                        # 从 Data1 获取资金对账表
                         if not df_fund_current.empty:
                             fund_dept_col = safe_get_column(df_fund_current, ['部门', '部门名称'], 2)
                             if fund_dept_col:
@@ -1071,7 +1106,7 @@ try:
             st.exception(e)
 
     # ============================================================
-    # 每月开户数统计（带月份筛选器）
+    # 每月开户数统计
     # ============================================================
     if not df_investor.empty:
         st.subheader("📊 每月开户数统计（自2021年起）")
@@ -1257,22 +1292,11 @@ try:
                         )
                         st.plotly_chart(fig, use_container_width=True, key="investor_trend_chart")
                     
-                    if selected_month_filter != '全部':
-                        current_month = selected_month_filter.replace('年', '').replace('月', '')
-                        current_year = int(current_month[:4])
-                        current_month_num = int(current_month[4:6])
-                        last_year_month = f"{current_year - 1}{current_month_num:02d}"
-                        last_year_display = f"{current_year - 1}年{current_month_num:02d}月"
-                    else:
-                        latest_year = max(monthly_count['年份'].unique())
-                        current_month = None
-                        last_year_month = None
-                        last_year_display = None
-                    
                     col_pie1, col_pie2 = st.columns(2)
                     
                     with col_pie1:
                         if selected_month_filter != '全部':
+                            current_month = selected_month_filter.replace('年', '').replace('月', '')
                             pie_investors_current = investor_unique[investor_unique['年月'] == current_month]
                             if not pie_investors_current.empty:
                                 type_pie_data_current = pie_investors_current.groupby(type_col).size().reset_index(name='数量')
@@ -1302,6 +1326,7 @@ try:
                             else:
                                 st.info(f"{selected_month_filter} 暂无数据")
                         else:
+                            latest_year = max(monthly_count['年份'].unique())
                             latest_year_data = investor_unique[investor_unique['年份'] == latest_year]
                             if not latest_year_data.empty:
                                 type_pie_data_latest = latest_year_data.groupby(type_col).size().reset_index(name='数量')
@@ -1332,7 +1357,13 @@ try:
                                 st.info(f"{int(latest_year)}年 暂无数据")
                     
                     with col_pie2:
-                        if selected_month_filter != '全部' and last_year_month is not None:
+                        if selected_month_filter != '全部':
+                            current_month = selected_month_filter.replace('年', '').replace('月', '')
+                            current_year = int(current_month[:4])
+                            current_month_num = int(current_month[4:6])
+                            last_year_month = f"{current_year - 1}{current_month_num:02d}"
+                            last_year_display = f"{current_year - 1}年{current_month_num:02d}月"
+                            
                             pie_investors_last = investor_unique[investor_unique['年月'] == last_year_month]
                             if not pie_investors_last.empty:
                                 type_pie_data_last = pie_investors_last.groupby(type_col).size().reset_index(name='数量')
@@ -1361,7 +1392,7 @@ try:
                                 st.plotly_chart(fig_pie_last, use_container_width=True, key="investor_pie_last")
                             else:
                                 st.info(f"{last_year_display} 暂无数据")
-                        elif selected_month_filter == '全部':
+                        else:
                             if len(years_sorted) >= 2:
                                 prev_year = years_sorted[-2]
                                 prev_year_data = investor_unique[investor_unique['年份'] == prev_year]
@@ -1394,8 +1425,6 @@ try:
                                     st.info(f"{int(prev_year)}年 暂无数据")
                             else:
                                 st.info("暂无去年数据")
-                        else:
-                            st.info("暂无去年同期数据")
                                             
         except Exception as e:
             st.warning(f"加载开户数据时出错: {e}")
@@ -1404,10 +1433,10 @@ try:
     # ============================================================
     # 活跃客户统计
     # ============================================================
-    if '活跃客户' in data_cache and not data_cache['活跃客户'].empty:
+    if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
         st.subheader("📊 公司客户资金情况统计")
         try:
-            df_active = data_cache['活跃客户'].copy()
+            df_active = data2_cache['活跃客户'].copy()
             df_active = clean_dataframe(df_active)
             
             month_col = safe_get_column(df_active, ['月份', '月份'], 0)
@@ -1443,25 +1472,26 @@ try:
                         lambda x: f"{x[:4]}年{x[4:6]}月"
                     )
                     
-                    df_fund = data_cache.get('资金对账表-月', pd.DataFrame())
+                    # 资金对账表在 Data1 中
+                    df_fund = data1_cache.get('资金对账表-月', pd.DataFrame())
                     df_fund = clean_dataframe(df_fund)
                     
-                    df_trade = data_cache.get('交易统计表-月', pd.DataFrame())
+                    df_trade = data2_cache.get('交易统计表-月', pd.DataFrame())
                     df_trade = clean_dataframe(df_trade)
                     df_trade = normalize_trade_columns(df_trade)
                     
                     fund_month_col = safe_get_column(df_fund, ['月份', '月份'], 0)
-                    fund_investor_col = safe_get_column(df_fund, ['投资者代码', '客户代码', '投资者'], 2)
-                    fund_equity_col = safe_get_column(df_fund, ['期末权益', '权益'], 7)
-                    fund_fee_col = safe_get_column(df_fund, ['留存手续费', '手续费', '手续费留存'], 5)
-                    fund_inflow_col = safe_get_column(df_fund, ['入金', '入金金额'], 3)
-                    fund_outflow_col = safe_get_column(df_fund, ['出金', '出金金额'], 4)
+                    fund_investor_col = safe_get_column(df_fund, ['投资者代码', '投资者代码', '客户代码', '投资者'], 2)
+                    fund_equity_col = safe_get_column(df_fund, ['期末权益', '期末权益', '权益'], 7)
+                    fund_fee_col = safe_get_column(df_fund, ['留存手续费', '留存手续费', '手续费', '手续费留存'], 5)
+                    fund_inflow_col = safe_get_column(df_fund, ['入金', '入金', '入金金额'], 3)
+                    fund_outflow_col = safe_get_column(df_fund, ['出金', '出金', '出金金额'], 4)
                     
                     trade_month_col = safe_get_column(df_trade, ['月份', '月份'], 0)
-                    trade_investor_col = safe_get_column(df_trade, ['投资者代码', '客户代码', '投资者'], 3)
-                    trade_pnl_col = safe_get_column(df_trade, ['平仓盈亏'], 4)
-                    trade_option_income_col = safe_get_column(df_trade, ['期权权利金收入', '权利金收入'], 5)
-                    trade_option_expense_col = safe_get_column(df_trade, ['期权权利金支出', '权利金支出'], 6)
+                    trade_investor_col = safe_get_column(df_trade, ['投资者代码', '投资者代码', '客户代码', '投资者'], 3)
+                    trade_pnl_col = safe_get_column(df_trade, ['平仓盈亏', '平仓盈亏'], 4)
+                    trade_option_income_col = safe_get_column(df_trade, ['期权权利金收入', '期权权利金收入', '权利金收入'], 5)
+                    trade_option_expense_col = safe_get_column(df_trade, ['期权权利金支出', '期权权利金支出', '权利金支出'], 6)
                     
                     all_months = monthly_active['年月显示'].tolist()
                     
@@ -1483,7 +1513,9 @@ try:
                     
                     active_count = filtered_active['活跃客户数'].sum() if not filtered_active.empty else 0
                     
-                    if df_fund.empty or fund_equity_col is None or fund_investor_col is None:
+                    fund_available = not df_fund.empty and fund_equity_col is not None and fund_investor_col is not None
+                    
+                    if not fund_available:
                         st.warning("未找到资金对账表或期末权益列，无法计算资金区间分布")
                         labels = ['2万以下', '2万（含）-10万', '10万（含）-50万', '50万（含）-100万', 
                                   '100万（含）-300万', '300万（含）-1000万', '1000万（含）-3000万', '3000万（含）以上']
@@ -1522,8 +1554,9 @@ try:
                                 pass
                             return None
                         
-                        df_fund['年月'] = df_fund[fund_month_col].apply(format_fund_month)
-                        df_fund = df_fund.dropna(subset=['年月', fund_equity_col, fund_investor_col])
+                        df_fund['年月'] = df_fund[fund_month_col].apply(format_fund_month) if fund_month_col is not None else None
+                        if fund_month_col is not None:
+                            df_fund = df_fund.dropna(subset=['年月', fund_equity_col, fund_investor_col])
                         
                         bins = [0, 20000, 100000, 500000, 1000000, 3000000, 10000000, 30000000, float('inf')]
                         labels = ['2万以下', '2万（含）-10万', '10万（含）-50万', '50万（含）-100万', 
@@ -1533,6 +1566,11 @@ try:
                             filtered_fund = df_fund[df_fund['年月'] == selected_month_raw]
                         else:
                             filtered_fund = df_fund
+                        
+                        if selected_month_filter != '全部':
+                            active_investors = active_df[active_df['年月'] == selected_month_raw][investor_col].unique()
+                        else:
+                            active_investors = active_df[investor_col].unique()
                         
                         pnl_by_investor = {}
                         if not df_trade.empty and trade_month_col is not None and trade_investor_col is not None:
@@ -1544,7 +1582,9 @@ try:
                             else:
                                 filtered_trade = df_trade
                             
-                            if trade_pnl_col is not None:
+                            filtered_trade = filtered_trade[filtered_trade[trade_investor_col].isin(active_investors)]
+                            
+                            if trade_pnl_col is not None and not filtered_trade.empty:
                                 filtered_trade['平仓盈亏计算'] = 0
                                 filtered_trade['平仓盈亏计算'] += filtered_trade[trade_pnl_col].fillna(0)
                                 if trade_option_income_col is not None:
@@ -1555,6 +1595,8 @@ try:
                                 trade_pnl_summary = filtered_trade.groupby(trade_investor_col)['平仓盈亏计算'].sum().reset_index()
                                 trade_pnl_summary.columns = [fund_investor_col, '平仓盈亏']
                                 pnl_by_investor = dict(zip(trade_pnl_summary[fund_investor_col], trade_pnl_summary['平仓盈亏']))
+                        
+                        filtered_fund = filtered_fund[filtered_fund[fund_investor_col].isin(active_investors)]
                         
                         if not filtered_fund.empty:
                             agg_dict = {
@@ -1696,23 +1738,28 @@ try:
             st.exception(e)
 
     # ============================================================
-    # 市场权益 vs 公司权益对比
+    # 市场权益 vs 公司权益对比（含中位数）
     # ============================================================
-    if '市场权益' in data_cache and not data_cache['市场权益'].empty:
-        st.subheader("📊 市场权益 vs 公司权益对比")
+    if '市场权益' in data2_cache and not data2_cache['市场权益'].empty:
+        st.subheader("📊 市场权益 vs 公司权益 vs 中位数对比")
         try:
-            df_market_equity = data_cache['市场权益'].copy()
+            df_market_equity = data2_cache['市场权益'].copy()
             df_market_equity = clean_dataframe(df_market_equity)
             
             month_col = safe_get_column(df_market_equity, ['月份', '月份'], 0)
             equity_col = safe_get_column(df_market_equity, ['市场权益', '市场权益'], 1)
+            median_col = safe_get_column(df_market_equity, ['中位数', '中位数（亿）', '权益中位数', '中位数权益'], 2)
             
             if month_col is None:
                 st.warning("未找到'月份'列，请检查数据格式")
             elif equity_col is None:
                 st.warning("未找到'市场权益'列，请检查数据格式")
             else:
-                market_equity_df = df_market_equity[[month_col, equity_col]].copy()
+                cols_to_extract = [month_col, equity_col]
+                if median_col is not None:
+                    cols_to_extract.append(median_col)
+                
+                market_equity_df = df_market_equity[cols_to_extract].copy()
                 market_equity_df = market_equity_df.dropna(subset=[month_col, equity_col])
                 
                 def format_month(val):
@@ -1726,6 +1773,10 @@ try:
                 
                 market_equity_df['年月'] = market_equity_df[month_col].apply(format_month)
                 market_equity_df['市场权益'] = market_equity_df[equity_col]
+                
+                if median_col is not None:
+                    market_equity_df['中位数（亿元）'] = market_equity_df[median_col]
+                
                 market_equity_df = market_equity_df.dropna(subset=['年月'])
                 
                 if market_equity_df.empty:
@@ -1733,7 +1784,8 @@ try:
                 else:
                     company_equity_list = []
                     
-                    df_fund_current = data_cache.get('资金对账表-月', pd.DataFrame())
+                    # 公司权益从 Data1 的资金对账表获取
+                    df_fund_current = data1_cache.get('资金对账表-月', pd.DataFrame())
                     df_fund_current = clean_dataframe(df_fund_current)
                     
                     fund_month_col = safe_get_column(df_fund_current, ['月份', '月份'], 0)
@@ -1758,7 +1810,8 @@ try:
                             current_equity['公司权益'] = current_equity['公司权益'] / 100000000
                             company_equity_list.append(current_equity)
                     
-                    df_fund_last = data_cache.get('上一年资金对账表-月', pd.DataFrame())
+                    # 去年公司权益从 Data2 的上一年资金对账表获取
+                    df_fund_last = data2_cache.get('上一年资金对账表-月', pd.DataFrame())
                     df_fund_last = clean_dataframe(df_fund_last)
                     
                     last_fund_month_col = safe_get_column(df_fund_last, ['月份', '月份'], 0)
@@ -1801,7 +1854,6 @@ try:
                         merged_df['公司权益（亿元）'] = merged_df['公司权益']
                         
                         merged_df = merged_df.sort_values('年月')
-                        
                         chart_df = merged_df.tail(12).copy()
                         
                         chart_df['年月显示'] = chart_df['年月'].apply(
@@ -1822,6 +1874,12 @@ try:
                                     '权益': row['公司权益（亿元）'],
                                     '类型': '公司权益（亿元）'
                                 })
+                            if '中位数（亿元）' in row and pd.notna(row['中位数（亿元）']):
+                                plot_data.append({
+                                    '月份': row['年月显示'],
+                                    '权益': row['中位数（亿元）'],
+                                    '类型': '中位数（亿元）'
+                                })
                         
                         if plot_data:
                             plot_df = pd.DataFrame(plot_data)
@@ -1836,12 +1894,13 @@ try:
                                 y='权益',
                                 color='类型',
                                 barmode='group',
-                                title='市场权益（百亿元）vs 公司权益（亿元）对比（最近12个月）',
+                                title='市场权益（百亿元）vs 公司权益（亿元）vs 中位数（亿元）对比（最近12个月）',
                                 labels={'权益': '权益', '月份': '月份'},
                                 text_auto='.2f',
                                 color_discrete_map={
                                     '市场权益（百亿元）': '#2E86C1',
-                                    '公司权益（亿元）': '#F39C12'
+                                    '公司权益（亿元）': '#F39C12',
+                                    '中位数（亿元）': '#28B463'
                                 }
                             )
                             
@@ -1866,11 +1925,14 @@ try:
                             st.plotly_chart(fig, use_container_width=True)
                             
                             with st.expander("📋 查看详细数据"):
-                                display_df = chart_df[['年月显示', '市场权益（百亿元）', '公司权益（亿元）']].copy()
+                                display_cols = ['年月显示', '市场权益（百亿元）', '公司权益（亿元）']
+                                if '中位数（亿元）' in chart_df.columns:
+                                    display_cols.append('中位数（亿元）')
+                                display_df = chart_df[display_cols].copy()
                                 display_df = display_df.sort_values('年月显示')
-                                display_df.columns = ['月份', '市场权益（百亿元）', '公司权益（亿元）']
+                                display_df.columns = ['月份'] + display_cols[1:]
                                 
-                                for col in ['市场权益（百亿元）', '公司权益（亿元）']:
+                                for col in display_df.columns[1:]:
                                     display_df[col] = display_df[col].apply(
                                         lambda x: f"{x:.2f}" if pd.notna(x) else '-'
                                     )
