@@ -94,23 +94,14 @@ def safe_get_column(df: pd.DataFrame, col_names: List[str], default_idx: int = N
     return None
 
 @st.cache_data
-def load_data_from_github(url, sheet_name):
-    """从GitHub加载Excel文件的指定sheet"""
-    try:
-        response = requests.get(url, timeout=30)
-        if response.status_code != 200:
-            st.error(f"无法从GitHub加载文件: {url}, 状态码: {response.status_code}")
-            return pd.DataFrame()
-        
-        excel_data = BytesIO(response.content)
-        if url.endswith('.xlsx') or url.endswith('.xls'):
-            df = pd.read_excel(excel_data, sheet_name=sheet_name, header=0)
-        else:
-            df = pd.read_csv(excel_data)
-        return clean_dataframe(df)
-    except Exception as e:
-        st.error(f"加载数据失败: {e}")
+def load_data(uploaded_file, sheet_name):
+    if uploaded_file is None:
         return pd.DataFrame()
+    if uploaded_file.name.endswith(('.xlsx', '.xls')):
+        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, header=0)
+    else:
+        df = pd.read_csv(uploaded_file)
+    return clean_dataframe(df)
 
 def normalize_trade_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -213,15 +204,24 @@ def create_line_chart(df: pd.DataFrame, x: str, y: str, color: str,
     return fig
 
 # ============================================================
-# 侧边栏 - 显示数据来源
+# 侧边栏 - 两个文件上传
 # ============================================================
 with st.sidebar:
-    st.header("📁 数据来源")
-    st.info(f"📊 从GitHub加载数据\n\nData1: `{EXCEL_DATA1}`\nData2: `{EXCEL_DATA2}`")
+    st.header("📁 数据上传")
     
-    if st.button("🔄 刷新数据", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
+    st.subheader("Data1 - 市场数据 + 资金对账表")
+    uploaded_file_data1 = st.file_uploader(
+        "上传 Data1 (成交量/成交额/持仓量/资金对账表)", 
+        type=['xlsx', 'xls', 'csv'],
+        key="data1_uploader"
+    )
+    
+    st.subheader("Data2 - 业务数据")
+    uploaded_file_data2 = st.file_uploader(
+        "上传 Data2 (上一年资金/交易/投资者/活跃客户/市场权益)", 
+        type=['xlsx', 'xls', 'csv'],
+        key="data2_uploader"
+    )
     
     st.divider()
     st.caption(f"最后更新: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -229,53 +229,55 @@ with st.sidebar:
 # ============================================================
 # 主逻辑
 # ============================================================
-st.title("📊 交易数据看板")
+if not uploaded_file_data1 and not uploaded_file_data2:
+    st.info("👈 请从左侧上传 Data1 和 Data2 数据文件")
+    st.stop()
+
+if not uploaded_file_data1:
+    st.warning("⚠️ 请上传 Data1 文件（包含成交量、成交额、持仓量、资金对账表数据）")
+if not uploaded_file_data2:
+    st.warning("⚠️ 请上传 Data2 文件（包含上一年资金、交易、投资者、活跃客户、市场权益数据）")
 
 try:
     # ============================================================
-    # 显示加载状态
+    # Data1 - 市场数据 + 资金对账表加载
     # ============================================================
-    with st.status("正在从GitHub加载数据...", expanded=True) as status:
-        st.write("📥 正在加载 Data1 (市场数据 + 资金对账表)...")
-        
-        # ============================================================
-        # Data1 - 市场数据 + 资金对账表加载
-        # ============================================================
-        data1_sheets = {
-            '成交量-市场': '成交量-市场',
-            '成交量-公司': '成交量-公司',
-            '成交额-市场': '成交额-市场',
-            '成交额-公司': '成交额-公司',
-            '持仓量-市场': '持仓量-市场',
-            '持仓量-公司': '持仓量-公司',
-            '资金对账表-月': '资金对账表-月',
-        }
-        
-        data1_cache = {}
+    data1_sheets = {
+        '成交量-市场': '成交量-市场', '成交量-公司': '成交量-公司',
+        '成交额-市场': '成交额-市场', '成交额-公司': '成交额-公司',
+        '持仓量-市场': '持仓量-市场', '持仓量-公司': '持仓量-公司',
+        '资金对账表-月': '资金对账表-月',
+    }
+    data1_cache = {}
+    if uploaded_file_data1:
         for key, sheet in data1_sheets.items():
-            st.write(f"  - 加载 {key}...")
-            data1_cache[key] = load_data_from_github(GITHUB_DATA1_URL, sheet)
-        
-        st.write("📥 正在加载 Data2 (业务数据)...")
-        
-        # ============================================================
-        # Data2 - 业务数据加载
-        # ============================================================
-        data2_sheets = {
-            '上一年资金对账表-月': '上一年资金对账表-月',
-            '交易统计表-月': '交易统计表-月',
-            '上一年交易统计表-月': '上一年交易统计表-月',
-            '投资者资料查询': '投资者资料查询',
-            '活跃客户': '活跃客户',
-            '市场权益': '市场权益'
-        }
-        
-        data2_cache = {}
+            try:
+                data1_cache[key] = load_data(uploaded_file_data1, sheet)
+            except Exception:
+                data1_cache[key] = pd.DataFrame()
+    else:
+        for key in data1_sheets.keys():
+            data1_cache[key] = pd.DataFrame()
+
+    # ============================================================
+    # Data2 - 业务数据加载（不包含资金对账表-月）
+    # ============================================================
+    data2_sheets = {
+        '上一年资金对账表-月': '上一年资金对账表-月',
+        '交易统计表-月': '交易统计表-月', '上一年交易统计表-月': '上一年交易统计表-月',
+        '投资者资料查询': '投资者资料查询', '活跃客户': '活跃客户',
+        '市场权益': '市场权益'
+    }
+    data2_cache = {}
+    if uploaded_file_data2:
         for key, sheet in data2_sheets.items():
-            st.write(f"  - 加载 {key}...")
-            data2_cache[key] = load_data_from_github(GITHUB_DATA2_URL, sheet)
-        
-        status.update(label="✅ 数据加载完成!", state="complete")
+            try:
+                data2_cache[key] = load_data(uploaded_file_data2, sheet)
+            except Exception:
+                data2_cache[key] = pd.DataFrame()
+    else:
+        for key in data2_sheets.keys():
+            data2_cache[key] = pd.DataFrame()
 
     # ============================================================
     # 从缓存中提取变量
@@ -287,7 +289,7 @@ try:
     df_amt_company = data1_cache['成交额-公司']
     df_oi_market = data1_cache['持仓量-市场']
     df_oi_company = data1_cache['持仓量-公司']
-    df_fund_current = data1_cache['资金对账表-月']
+    df_fund_current = data1_cache['资金对账表-月']  # 资金对账表在 Data1 中
     
     # 从 Data2 提取
     df_fund_last_year = data2_cache['上一年资金对账表-月']
@@ -304,8 +306,10 @@ try:
     all_data = {**data1_cache, **data2_cache}
     available_sheets = {k: v for k, v in all_data.items() if not v.empty}
     if not available_sheets:
-        st.error("❌ 没有可用的数据表，请检查GitHub上的文件是否正确")
+        st.error("❌ 没有可用的数据表")
         st.stop()
+
+    st.title("📊 交易数据看板")
 
     # ============================================================
     # 数据筛选
@@ -1017,6 +1021,7 @@ try:
                             pnl_df.columns = ['部门', '平仓盈亏']
                             result = pd.merge(result, pnl_df, on='部门', how='left').fillna(0)
 
+                        # 从 Data1 获取资金对账表
                         if not df_fund_current.empty:
                             fund_dept_col = safe_get_column(df_fund_current, ['部门', '部门名称'], 2)
                             if fund_dept_col:
