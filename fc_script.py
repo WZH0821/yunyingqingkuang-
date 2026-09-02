@@ -484,20 +484,48 @@ try:
                 st.subheader(f"📊 交易所环比同比综合表（{suffix}）")
                 total = market_total if suffix == '市场' else company_total
                 unit_key = 'market_unit' if suffix == '市场' else 'company_unit'
-                table_data = [{
+                
+                # 先构建包含原始数值的DataFrame
+                table_data = []
+                # 添加合计行
+                table_data.append({
                     '维度': '合计',
-                    f'{data_type}（{metric_config[unit_key]}）': f"{total['current']:.2f}",
-                    '环比（%）': format_percent(total['mom']),
-                    '同比（%）': format_percent(total['yoy'])
-                }]
+                    f'{data_type}': total['current'],
+                    '环比': total['mom'],
+                    '同比': total['yoy']
+                })
+                # 添加各交易所数据
                 for _, row in df_plot.iterrows():
                     table_data.append({
                         '维度': row['交易所'],
-                        f'{data_type}（{metric_config[unit_key]}）': f"{row['本月']:.2f}",
-                        '环比（%）': format_percent(row.get('环比')),
-                        '同比（%）': format_percent(row.get('同比'))
+                        f'{data_type}': row['本月'],
+                        '环比': row.get('环比'),
+                        '同比': row.get('同比')
                     })
-                st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+                
+                df_table = pd.DataFrame(table_data)
+                
+                # 使用column_config格式化显示
+                st.dataframe(
+                    df_table,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        '维度': st.column_config.TextColumn('维度'),
+                        f'{data_type}': st.column_config.NumberColumn(
+                            f'{data_type}（{metric_config[unit_key]}）',
+                            format="%.2f"
+                        ),
+                        '环比': st.column_config.NumberColumn(
+                            '环比（%）',
+                            format="%+.2f%%"
+                        ),
+                        '同比': st.column_config.NumberColumn(
+                            '同比（%）',
+                            format="%+.2f%%"
+                        )
+                    }
+                )
 
     # ============================================================
     # 公司占市场比重
@@ -697,20 +725,49 @@ try:
                 compare_label1 = '环比' if time_dimension != '年度' else '同比'
                 compare_label2 = '同比' if time_dimension != '年度' else '-'
                 
-                table_data = [{
+                # 构建包含原始数值的DataFrame
+                table_data = []
+                # 添加合计行
+                total_row = {
                     '维度': '合计',
-                    f'{group_data_type}（{unit}）': f"{total['current']:.2f}",
-                    f'{compare_label1}（%）': format_percent(total['mom'] if time_dimension != '年度' else total['yoy']),
-                    f'{compare_label2}（%）': format_percent(total['yoy'] if time_dimension != '年度' else None)
-                }]
+                    f'{group_data_type}': total['current'],
+                    'compare1': total['mom'] if time_dimension != '年度' else total['yoy'],
+                    'compare2': total['yoy'] if time_dimension != '年度' else None
+                }
+                table_data.append(total_row)
+                
+                # 添加各板块数据
                 for _, row in df_plot.iterrows():
                     table_data.append({
                         '维度': row[group_col],
-                        f'{group_data_type}（{unit}）': f"{row[current_label]:.2f}",
-                        f'{compare_label1}（%）': format_percent(row.get('环比' if time_dimension != '年度' else '同比')),
-                        f'{compare_label2}（%）': format_percent(row.get('同比' if time_dimension != '年度' else None))
+                        f'{group_data_type}': row[current_label],
+                        'compare1': row.get('环比' if time_dimension != '年度' else '同比'),
+                        'compare2': row.get('同比' if time_dimension != '年度' else None)
                     })
-                st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
+                
+                df_table = pd.DataFrame(table_data)
+                
+                # 使用column_config格式化显示
+                st.dataframe(
+                    df_table,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        '维度': st.column_config.TextColumn('维度'),
+                        f'{group_data_type}': st.column_config.NumberColumn(
+                            f'{group_data_type}（{unit}）',
+                            format="%.2f"
+                        ),
+                        'compare1': st.column_config.NumberColumn(
+                            f'{compare_label1}（%）',
+                            format="%+.2f%%"
+                        ),
+                        'compare2': st.column_config.NumberColumn(
+                            f'{compare_label2}（%）',
+                            format="%+.2f%%"
+                        )
+                    }
+                )
 
     # ============================================================
     # 资金统计
