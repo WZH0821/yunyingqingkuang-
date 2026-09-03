@@ -322,25 +322,16 @@ st.title("📊 交易数据看板")
 if 'data1_cache' not in st.session_state or 'data2_cache' not in st.session_state:
     try:
         data1_cache, data2_cache = load_data_from_github()
+        # 存储到 session_state
+        st.session_state.data1_cache = data1_cache
+        st.session_state.data2_cache = data2_cache
     except Exception as e:
         st.error(f"❌ 加载数据失败: {e}")
         st.stop()
-
-data1_cache = st.session_state.data1_cache
-data2_cache = st.session_state.data2_cache
-
-# 检查数据是否为空
-all_data = {**data1_cache, **data2_cache}
-available_sheets = {k: v for k, v in all_data.items() if not v.empty}
-
-if not available_sheets:
-    st.error("❌ 没有可用的数据表，请检查GitHub上的数据文件")
-    st.info(f"""
-    **请确保以下文件存在且包含有效数据:**
-    1. {GITHUB_FILE_URL_DATA1}
-    2. {GITHUB_FILE_URL_DATA2}
-    """)
-    st.stop()
+else:
+    # 从 session_state 获取数据
+    data1_cache = st.session_state.data1_cache
+    data2_cache = st.session_state.data2_cache
 
 # ============================================================
 # 从缓存中提取变量
