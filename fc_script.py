@@ -322,8 +322,6 @@ st.title("📊 交易数据看板")
 if 'data1_cache' not in st.session_state or 'data2_cache' not in st.session_state:
     try:
         data1_cache, data2_cache = load_data_from_github()
-        st.session_state.data1_cache = data1_cache
-        st.session_state.data2_cache = data2_cache
     except Exception as e:
         st.error(f"❌ 加载数据失败: {e}")
         st.stop()
