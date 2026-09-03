@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from typing import Dict, List, Optional, Tuple
 import requests
+from io import BytesIO
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
@@ -19,7 +20,7 @@ GITHUB_FILE_URL_DATA1 = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{G
 GITHUB_FILE_URL_DATA2 = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{EXCEL_FILENAME_DATA2}"
 
 # ============================================================
-# 配置常量
+# 常量配置
 # ============================================================
 METRIC_CONFIG = {
     '成交量': {
@@ -44,6 +45,85 @@ COLOR_MAP = {
 
 MONTH_NAMES = {1: '1月', 2: '2月', 3: '3月', 4: '4月', 5: '5月', 6: '6月',
                7: '7月', 8: '8月', 9: '9月', 10: '10月', 11: '11月', 12: '12月'}
+
+# ============================================================
+# GitHub数据加载函数
+# ============================================================
+@st.cache_data(ttl=3600)  # 缓存1小时
+def load_excel_from_github(url: str) -> Dict[str, pd.DataFrame]:
+    """
+    从GitHub URL加载Excel文件的所有sheet
+    """
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        
+        excel_data = BytesIO(response.content)
+        excel_file = pd.ExcelFile(excel_data)
+        
+        sheets_dict = {}
+        for sheet_name in excel_file.sheet_names:
+            try:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name, header=0)
+                sheets_dict[sheet_name] = clean_dataframe(df)
+            except Exception as e:
+                st.warning(f"读取sheet '{sheet_name}' 时出错: {e}")
+                sheets_dict[sheet_name] = pd.DataFrame()
+        
+        return sheets_dict
+    except requests.exceptions.RequestException as e:
+        st.error(f"从GitHub下载文件失败: {e}")
+        st.info(f"请检查URL是否正确: {url}")
+        return {}
+    except Exception as e:
+        st.error(f"读取Excel文件失败: {e}")
+        return {}
+
+@st.cache_data(ttl=3600)
+def load_data_from_github() -> Tuple[Dict[str, pd.DataFrame], Dict[str, pd.DataFrame]]:
+    """
+    从GitHub加载Data1和Data2
+    """
+    st.info("🔄 正在从GitHub加载数据...")
+    
+    data1_cache = {}
+    data2_cache = {}
+    
+    # 加载Data1
+    st.text(f"📁 加载 Data1: {GITHUB_FILE_URL_DATA1}")
+    data1_raw = load_excel_from_github(GITHUB_FILE_URL_DATA1)
+    
+    # 映射Data1的sheet
+    data1_sheets = {
+        '成交量-市场': '成交量-市场',
+        '成交量-公司': '成交量-公司',
+        '成交额-市场': '成交额-市场',
+        '成交额-公司': '成交额-公司',
+        '持仓量-市场': '持仓量-市场',
+        '持仓量-公司': '持仓量-公司',
+        '资金对账表-月': '资金对账表-月',
+    }
+    for key, sheet in data1_sheets.items():
+        data1_cache[key] = data1_raw.get(sheet, pd.DataFrame())
+    
+    # 加载Data2
+    st.text(f"📁 加载 Data2: {GITHUB_FILE_URL_DATA2}")
+    data2_raw = load_excel_from_github(GITHUB_FILE_URL_DATA2)
+    
+    # 映射Data2的sheet
+    data2_sheets = {
+        '上一年资金对账表-月': '上一年资金对账表-月',
+        '交易统计表-月': '交易统计表-月',
+        '上一年交易统计表-月': '上一年交易统计表-月',
+        '投资者资料查询': '投资者资料查询',
+        '活跃客户': '活跃客户',
+        '市场权益': '市场权益'
+    }
+    for key, sheet in data2_sheets.items():
+        data2_cache[key] = data2_raw.get(sheet, pd.DataFrame())
+    
+    st.success("✅ 数据加载完成！")
+    return data1_cache, data2_cache
 
 # ============================================================
 # 工具函数
@@ -180,7 +260,7 @@ def create_line_chart(df: pd.DataFrame, x: str, y: str, color: str,
     if df.empty:
         return None
     fig = px.line(df, x=x, y=y, color=color, title=title,
-                  labels={x: xlabel, y: ylabel, color: ''},
+                  labels={x: xlabel, y: ylabel},
                   markers=True, color_discrete_map=color_map)
     fig.update_layout(
         title_font=dict(size=14, color='#1A5276'), font=dict(size=11),
@@ -193,208 +273,175 @@ def create_line_chart(df: pd.DataFrame, x: str, y: str, color: str,
     return fig
 
 # ============================================================
-# 从GitHub加载数据的函数（带缓存）
-# ============================================================
-@st.cache_data
-def load_data_from_github(url: str):
-    """从GitHub加载Excel数据"""
-    try:
-        response = requests.head(url, timeout=10)
-        if response.status_code != 200:
-            st.error(f"❌ 无法从GitHub获取数据文件")
-            st.info(f"请检查文件路径: {url}")
-            return None
-        
-        df_excel = pd.read_excel(url, sheet_name=None, header=0)
-        return df_excel
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ 网络请求失败: {e}")
-        return None
-    except Exception as e:
-        st.error(f"❌ 加载Excel文件失败: {e}")
-        return None
-
-# ============================================================
-# 侧边栏
+# 侧边栏 - 显示数据来源信息
 # ============================================================
 with st.sidebar:
-    st.header("📊 数据源")
-    st.info(f"📁 Data1: {EXCEL_FILENAME_DATA1}")
-    st.info(f"📁 Data2: {EXCEL_FILENAME_DATA2}")
-    st.caption(f"📅 最后更新: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.header("📊 数据看板")
+    
+    st.subheader("📁 数据来源")
+    st.info(f"""
+    **Data1 (市场数据 + 资金对账表)**
+    - 仓库: {GITHUB_REPO}
+    - 文件: {EXCEL_FILENAME_DATA1}
+    
+    **Data2 (业务数据)**
+    - 仓库: {GITHUB_REPO}
+    - 文件: {EXCEL_FILENAME_DATA2}
+    """)
+    
     st.divider()
     
-    if st.button("🔄 刷新数据"):
+    # 显示数据加载状态
+    st.subheader("📌 数据状态")
+    try:
+        # 检查数据是否已加载
+        if 'data1_cache' in st.session_state and 'data2_cache' in st.session_state:
+            data1_count = sum(1 for df in st.session_state.data1_cache.values() if not df.empty)
+            data2_count = sum(1 for df in st.session_state.data2_cache.values() if not df.empty)
+            st.success(f"✅ Data1: {data1_count}/7 个sheet已加载")
+            st.success(f"✅ Data2: {data2_count}/6 个sheet已加载")
+        else:
+            st.warning("⏳ 数据加载中...")
+    except:
+        st.warning("⏳ 数据加载中...")
+    
+    st.divider()
+    
+    # 刷新按钮
+    if st.button("🔄 刷新数据", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
     
-    st.divider()
-    st.caption(f"📌 数据来源: GitHub")
-    st.caption(f"🔗 {GITHUB_USERNAME}/{GITHUB_REPO}")
+    st.caption(f"最后更新: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ============================================================
 # 主逻辑
 # ============================================================
-with st.spinner('📥 正在从GitHub加载数据文件...'):
-    df_excel_data1 = load_data_from_github(GITHUB_FILE_URL_DATA1)
-    df_excel_data2 = load_data_from_github(GITHUB_FILE_URL_DATA2)
+st.title("📊 交易数据看板")
 
-if df_excel_data1 is None and df_excel_data2 is None:
-    st.error("❌ 无法加载数据，请检查网络连接和文件路径")
-    st.stop()
-
-try:
-    # ============================================================
-    # Data1 - 市场数据 + 资金对账表加载
-    # ============================================================
-    data1_sheets = {
-        '成交量-市场': '成交量-市场', '成交量-公司': '成交量-公司',
-        '成交额-市场': '成交额-市场', '成交额-公司': '成交额-公司',
-        '持仓量-市场': '持仓量-市场', '持仓量-公司': '持仓量-公司',
-        '资金对账表-月': '资金对账表-月',
-    }
-    data1_cache = {}
-    if df_excel_data1 is not None:
-        for key, sheet in data1_sheets.items():
-            try:
-                if sheet in df_excel_data1:
-                    data1_cache[key] = clean_dataframe(df_excel_data1[sheet])
-                else:
-                    data1_cache[key] = pd.DataFrame()
-            except Exception:
-                data1_cache[key] = pd.DataFrame()
-    else:
-        for key in data1_sheets.keys():
-            data1_cache[key] = pd.DataFrame()
-
-    # ============================================================
-    # Data2 - 业务数据加载
-    # ============================================================
-    data2_sheets = {
-        '上一年资金对账表-月': '上一年资金对账表-月',
-        '交易统计表-月': '交易统计表-月', '上一年交易统计表-月': '上一年交易统计表-月',
-        '投资者资料查询': '投资者资料查询', '活跃客户': '活跃客户',
-        '市场权益': '市场权益'
-    }
-    data2_cache = {}
-    if df_excel_data2 is not None:
-        for key, sheet in data2_sheets.items():
-            try:
-                if sheet in df_excel_data2:
-                    data2_cache[key] = clean_dataframe(df_excel_data2[sheet])
-                else:
-                    data2_cache[key] = pd.DataFrame()
-            except Exception:
-                data2_cache[key] = pd.DataFrame()
-    else:
-        for key in data2_sheets.keys():
-            data2_cache[key] = pd.DataFrame()
-
-    # ============================================================
-    # 从缓存中提取变量
-    # ============================================================
-    # 从 Data1 提取
-    df_vol_market = data1_cache['成交量-市场']
-    df_vol_company = data1_cache['成交量-公司']
-    df_amt_market = data1_cache['成交额-市场']
-    df_amt_company = data1_cache['成交额-公司']
-    df_oi_market = data1_cache['持仓量-市场']
-    df_oi_company = data1_cache['持仓量-公司']
-    df_fund_current = data1_cache['资金对账表-月']
-    
-    # 从 Data2 提取
-    df_fund_last_year = data2_cache['上一年资金对账表-月']
-    df_trade_stats = data2_cache['交易统计表-月']
-    df_trade_last = data2_cache['上一年交易统计表-月']
-    df_investor = data2_cache['投资者资料查询']
-    df_active = data2_cache['活跃客户']
-    df_market_equity = data2_cache['市场权益']
-
-    df_trade_stats = normalize_trade_columns(df_trade_stats)
-    df_trade_last = normalize_trade_columns(df_trade_last)
-
-    # 合并所有可用数据用于数据筛选器
-    all_data = {**data1_cache, **data2_cache}
-    available_sheets = {k: v for k, v in all_data.items() if not v.empty}
-    if not available_sheets:
-        st.error("❌ 没有可用的数据表")
+# 加载数据
+if 'data1_cache' not in st.session_state or 'data2_cache' not in st.session_state:
+    try:
+        data1_cache, data2_cache = load_data_from_github()
+        st.session_state.data1_cache = data1_cache
+        st.session_state.data2_cache = data2_cache
+    except Exception as e:
+        st.error(f"❌ 加载数据失败: {e}")
         st.stop()
 
-    st.title("📊 交易数据看板")
+data1_cache = st.session_state.data1_cache
+data2_cache = st.session_state.data2_cache
 
-    # ============================================================
-    # 数据筛选
-    # ============================================================
-    st.subheader("📋 数据筛选")
-    col_sheet, col_month_start, col_month_end = st.columns([2, 1.5, 1.5])
+# 检查数据是否为空
+all_data = {**data1_cache, **data2_cache}
+available_sheets = {k: v for k, v in all_data.items() if not v.empty}
 
-    with col_sheet:
-        selected_sheet = st.selectbox("选择数据表", options=list(available_sheets.keys()), key="sheet_selector")
+if not available_sheets:
+    st.error("❌ 没有可用的数据表，请检查GitHub上的数据文件")
+    st.info(f"""
+    **请确保以下文件存在且包含有效数据:**
+    1. {GITHUB_FILE_URL_DATA1}
+    2. {GITHUB_FILE_URL_DATA2}
+    """)
+    st.stop()
 
-    df = available_sheets[selected_sheet].copy()
-    month_cols = get_month_columns(df)
+# ============================================================
+# 从缓存中提取变量
+# ============================================================
+# 从 Data1 提取
+df_vol_market = data1_cache.get('成交量-市场', pd.DataFrame())
+df_vol_company = data1_cache.get('成交量-公司', pd.DataFrame())
+df_amt_market = data1_cache.get('成交额-市场', pd.DataFrame())
+df_amt_company = data1_cache.get('成交额-公司', pd.DataFrame())
+df_oi_market = data1_cache.get('持仓量-市场', pd.DataFrame())
+df_oi_company = data1_cache.get('持仓量-公司', pd.DataFrame())
+df_fund_current = data1_cache.get('资金对账表-月', pd.DataFrame())
 
-    month_filter_applied = False
-    selected_months = month_cols
+# 从 Data2 提取
+df_fund_last_year = data2_cache.get('上一年资金对账表-月', pd.DataFrame())
+df_trade_stats = data2_cache.get('交易统计表-月', pd.DataFrame())
+df_trade_last = data2_cache.get('上一年交易统计表-月', pd.DataFrame())
+df_investor = data2_cache.get('投资者资料查询', pd.DataFrame())
+df_active = data2_cache.get('活跃客户', pd.DataFrame())
+df_market_equity = data2_cache.get('市场权益', pd.DataFrame())
 
-    if month_cols:
-        month_cols_sorted = sorted(month_cols)
-        month_labels = {col: f"{str(col)[:4]}年{str(col)[4:6]}月" for col in month_cols_sorted}
+# 标准化数据
+df_trade_stats = normalize_trade_columns(df_trade_stats)
+df_trade_last = normalize_trade_columns(df_trade_last)
 
-        with col_month_start:
-            selected_month_start = st.selectbox("开始月份", options=month_cols_sorted,
-                                                format_func=lambda x: month_labels.get(x, str(x)),
-                                                index=0, key="month_start")
-        with col_month_end:
-            selected_month_end = st.selectbox("结束月份", options=month_cols_sorted,
-                                              format_func=lambda x: month_labels.get(x, str(x)),
-                                              index=len(month_cols_sorted) - 1, key="month_end")
+# ============================================================
+# 数据筛选
+# ============================================================
+st.subheader("📋 数据筛选")
+col_sheet, col_month_start, col_month_end = st.columns([2, 1.5, 1.5])
 
-        if selected_month_start and selected_month_end:
-            start_idx = month_cols_sorted.index(selected_month_start)
-            end_idx = month_cols_sorted.index(selected_month_end)
-            if start_idx <= end_idx:
-                selected_months = month_cols_sorted[start_idx:end_idx + 1]
-                month_filter_applied = True
-            else:
-                st.warning("⚠️ 开始月份不能晚于结束月份")
+with col_sheet:
+    selected_sheet = st.selectbox("选择数据表", options=list(available_sheets.keys()), key="sheet_selector")
 
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    filter_cols = [col for col in df.columns if col not in numeric_cols]
-    selected_filters = {}
+df = available_sheets[selected_sheet].copy()
+month_cols = get_month_columns(df)
 
-    if filter_cols:
-        st.markdown("**文本筛选条件**")
-        cols = st.columns(3)
-        for idx, col_name in enumerate(filter_cols):
-            with cols[idx % 3]:
-                unique_vals = df[col_name].dropna().unique().tolist()
-                if unique_vals:
-                    selected = st.multiselect(f"{col_name}", options=unique_vals, default=[], key=f"filter_{col_name}")
-                    if selected:
-                        selected_filters[col_name] = selected
+month_filter_applied = False
+selected_months = month_cols
 
-    filtered_df = df.copy()
-    for col, vals in selected_filters.items():
-        filtered_df = filtered_df[filtered_df[col].isin(vals)]
+if month_cols:
+    month_cols_sorted = sorted(month_cols)
+    month_labels = {col: f"{str(col)[:4]}年{str(col)[4:6]}月" for col in month_cols_sorted}
 
-    if month_filter_applied and selected_months:
-        non_month_cols = [col for col in filtered_df.columns if col not in month_cols]
-        filtered_df = filtered_df[non_month_cols + selected_months]
+    with col_month_start:
+        selected_month_start = st.selectbox("开始月份", options=month_cols_sorted,
+                                            format_func=lambda x: month_labels.get(x, str(x)),
+                                            index=0, key="month_start")
+    with col_month_end:
+        selected_month_end = st.selectbox("结束月份", options=month_cols_sorted,
+                                          format_func=lambda x: month_labels.get(x, str(x)),
+                                          index=len(month_cols_sorted) - 1, key="month_end")
 
-    st.success(f"✅ 当前查看: {selected_sheet}，共 {len(filtered_df)} 行，{len(filtered_df.columns)} 列")
-    df_display = filtered_df.reset_index(drop=True)
-    df_display.insert(0, '序号', range(1, len(df_display) + 1))
+    if selected_month_start and selected_month_end:
+        start_idx = month_cols_sorted.index(selected_month_start)
+        end_idx = month_cols_sorted.index(selected_month_end)
+        if start_idx <= end_idx:
+            selected_months = month_cols_sorted[start_idx:end_idx + 1]
+            month_filter_applied = True
+        else:
+            st.warning("⚠️ 开始月份不能晚于结束月份")
 
-    numeric_cols_display = df_display.select_dtypes(include=['number']).columns.tolist()
-    sum_row = {col: '' for col in df_display.columns}
-    sum_row['序号'] = ''
-    for col in numeric_cols_display:
-        if col != '序号':
-            sum_row[col] = df_display[col].sum()
-    sum_row[df_display.columns[1]] = '【总和】'
-    df_with_sum = pd.concat([df_display, pd.DataFrame([sum_row])], ignore_index=True)
-    st.dataframe(df_with_sum, use_container_width=True, height=400, hide_index=True)
+numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+filter_cols = [col for col in df.columns if col not in numeric_cols]
+selected_filters = {}
+
+if filter_cols:
+    st.markdown("**文本筛选条件**")
+    cols = st.columns(3)
+    for idx, col_name in enumerate(filter_cols):
+        with cols[idx % 3]:
+            unique_vals = df[col_name].dropna().unique().tolist()
+            if unique_vals:
+                selected = st.multiselect(f"{col_name}", options=unique_vals, default=[], key=f"filter_{col_name}")
+                if selected:
+                    selected_filters[col_name] = selected
+
+filtered_df = df.copy()
+for col, vals in selected_filters.items():
+    filtered_df = filtered_df[filtered_df[col].isin(vals)]
+
+if month_filter_applied and selected_months:
+    non_month_cols = [col for col in filtered_df.columns if col not in month_cols]
+    filtered_df = filtered_df[non_month_cols + selected_months]
+
+st.success(f"✅ 当前查看: {selected_sheet}，共 {len(filtered_df)} 行，{len(filtered_df.columns)} 列")
+df_display = filtered_df.reset_index(drop=True)
+df_display.insert(0, '序号', range(1, len(df_display) + 1))
+
+numeric_cols_display = df_display.select_dtypes(include=['number']).columns.tolist()
+sum_row = {col: '' for col in df_display.columns}
+sum_row['序号'] = ''
+for col in numeric_cols_display:
+    if col != '序号':
+        sum_row[col] = df_display[col].sum()
+sum_row[df_display.columns[1]] = '【总和】'
+df_with_sum = pd.concat([df_display, pd.DataFrame([sum_row])], ignore_index=True)
+st.dataframe(df_with_sum, use_container_width=True, height=400, hide_index=True)
 
     # ============================================================
     # 各交易所柱状图
@@ -485,16 +532,13 @@ try:
                 total = market_total if suffix == '市场' else company_total
                 unit_key = 'market_unit' if suffix == '市场' else 'company_unit'
                 
-                # 先构建包含原始数值的DataFrame
                 table_data = []
-                # 添加合计行
                 table_data.append({
                     '维度': '合计',
                     f'{data_type}': total['current'],
                     '环比': total['mom'],
                     '同比': total['yoy']
                 })
-                # 添加各交易所数据
                 for _, row in df_plot.iterrows():
                     table_data.append({
                         '维度': row['交易所'],
@@ -505,7 +549,6 @@ try:
                 
                 df_table = pd.DataFrame(table_data)
                 
-                # 使用column_config格式化显示
                 st.dataframe(
                     df_table,
                     use_container_width=True,
@@ -528,7 +571,7 @@ try:
                 )
 
     # ============================================================
-    # 公司占市场比重
+    # 公司占市场比重（整体）
     # ============================================================
     st.subheader("📊 公司占市场比重（整体）")
     try:
@@ -595,12 +638,261 @@ try:
                         row[f"{year}年{selected_metric_global}"] = f"{data_by_month[month][year].get(selected_metric_global, 0):.{dec}f}"
                     table_data.append(row)
                 table_df = pd.DataFrame(table_data)
-                table_df.index = table_df.index + 1
-                st.dataframe(table_df, use_container_width=True)
+                st.dataframe(table_df, use_container_width=True, hide_index=True)
         else:
             st.info("暂无公司占市场比重数据")
     except Exception as e:
         st.warning(f"无法加载公司/市场对比数据: {e}")
+
+    # ============================================================
+    # 各交易所单独展示折线图
+    # ============================================================
+    st.subheader("📊 公司占市场比重 - 各交易所单独展示")
+
+    try:
+        date_cols_all = get_month_columns(df_vol_market)
+        filtered_cols = []
+        for col in date_cols_all:
+            year, _ = parse_month_column(col)
+            if year and year >= 2024:
+                filtered_cols.append(col)
+        
+        exchanges_list = ['上期所', '能源中心', '郑商所', '大商所', '中金所', '广期所']
+        data_by_month_year_exchange = {}
+        for col in filtered_cols:
+            year, month = parse_month_column(col)
+            if year and month:
+                data_by_month_year_exchange.setdefault(month, {}).setdefault(year, {})
+                for ex in exchanges_list:
+                    data_by_month_year_exchange[month][year].setdefault(ex, {})
+                    
+                    vol_market_ex = df_vol_market[df_vol_market['交易所'] == ex][col].sum() if '交易所' in df_vol_market.columns else 0
+                    vol_company_ex = df_vol_company[df_vol_company['交易所'] == ex][col].sum() if '交易所' in df_vol_company.columns else 0
+                    amt_market_ex = df_amt_market[df_amt_market['交易所'] == ex][col].sum() if '交易所' in df_amt_market.columns else 0
+                    amt_company_ex = df_amt_company[df_amt_company['交易所'] == ex][col].sum() if '交易所' in df_amt_company.columns else 0
+                    oi_market_ex = df_oi_market[df_oi_market['交易所'] == ex][col].sum() if '交易所' in df_oi_market.columns else 0
+                    oi_company_ex = df_oi_company[df_oi_company['交易所'] == ex][col].sum() if '交易所' in df_oi_company.columns else 0
+                    
+                    data_by_month_year_exchange[month][year][ex]['成交量'] = safe_division(vol_company_ex, vol_market_ex * 2) * 100
+                    data_by_month_year_exchange[month][year][ex]['成交额'] = safe_division(amt_company_ex / 100000000, amt_market_ex * 2) * 100
+                    data_by_month_year_exchange[month][year][ex]['持仓量'] = safe_division(oi_company_ex, oi_market_ex * 2) * 100
+        
+        all_years = sorted({y for month_data in data_by_month_year_exchange.values() for y in month_data.keys()})
+        latest_year = max(all_years) if all_years else 2024
+        
+        plot_data_exchange = []
+        for month in sorted(data_by_month_year_exchange.keys()):
+            for year in sorted(data_by_month_year_exchange[month].keys()):
+                for ex in exchanges_list:
+                    for metric in ['成交量', '成交额', '持仓量']:
+                        value = data_by_month_year_exchange[month][year][ex].get(metric, 0)
+                        if value > 0:
+                            plot_data_exchange.append({
+                                '月份': MONTH_NAMES.get(month, str(month)),
+                                '年份': str(year) + '年',
+                                '交易所': ex,
+                                '指标': metric,
+                                '占比（%）': value
+                            })
+        
+        if plot_data_exchange:
+            plot_df_exchange = pd.DataFrame(plot_data_exchange)
+            selected_metric_exchange = st.selectbox(
+                "选择查看指标",
+                options=['成交量', '成交额', '持仓量'],
+                key="metric_selector_exchange"
+            )
+            metric_df_exchange = plot_df_exchange[plot_df_exchange['指标'] == selected_metric_exchange]
+            
+            if not metric_df_exchange.empty:
+                decimal_places = 4 if selected_metric_exchange == '成交额' else 3
+                color_map = {
+                    str(latest_year - 2) + '年': '#2E86C1',
+                    str(latest_year - 1) + '年': '#F39C12',
+                    str(latest_year) + '年': '#28B463'
+                }
+                color_map = {k: v for k, v in color_map.items() if k in metric_df_exchange['年份'].unique()}
+                
+                for i, ex in enumerate(exchanges_list):
+                    ex_df = metric_df_exchange[metric_df_exchange['交易所'] == ex]
+                    if not ex_df.empty:
+                        if i % 2 == 0:
+                            cols_container = st.columns(2)
+                        with cols_container[i % 2]:
+                            fig = px.line(
+                                ex_df,
+                                x='月份',
+                                y='占比（%）',
+                                color='年份',
+                                title=f'{ex}',
+                                labels={'月份': '', '占比（%）': '', '年份': ''},
+                                color_discrete_map=color_map,
+                                category_orders={'月份': ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']}
+                            )
+                            fig.update_yaxes(tickformat=f'.{decimal_places}f', title_text='', tickfont=dict(size=9))
+                            fig.update_xaxes(tickvals=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'], tickfont=dict(size=8))
+                            fig.update_traces(
+                                texttemplate=f'%{{y:.{decimal_places}f}}',
+                                textposition='top center',
+                                textfont=dict(size=7),
+                                mode='lines+markers+text',
+                                marker=dict(size=6)
+                            )
+                            fig.update_layout(
+                                title_font=dict(size=12),
+                                legend=dict(font=dict(size=9), orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+                                height=280,
+                                margin=dict(l=40, r=40, t=50, b=30),
+                                plot_bgcolor='#F8F9F9',
+                                paper_bgcolor='white'
+                            )
+                            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+            else:
+                st.info(f"暂无{selected_metric_exchange}数据")
+            
+            with st.expander("📋 查看各交易所详细数据"):
+                decimal_display = 4 if selected_metric_exchange == '成交额' else 3
+                for ex in exchanges_list:
+                    st.subheader(f"{ex}")
+                    table_data = []
+                    for month in sorted(data_by_month_year_exchange.keys()):
+                        row = {'月份': MONTH_NAMES.get(month, str(month))}
+                        for year in sorted(data_by_month_year_exchange[month].keys()):
+                            val = data_by_month_year_exchange[month][year][ex].get(selected_metric_exchange, 0)
+                            row[f"{year}年"] = f"{val:.{decimal_display}f}"
+                        table_data.append(row)
+                    table_df = pd.DataFrame(table_data)
+                    st.dataframe(table_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无公司占市场比重数据")
+    except Exception as e:
+        st.warning(f"无法加载公司/市场对比数据: {e}")
+
+    # ============================================================
+    # 能源化工板块折线图
+    # ============================================================
+    st.subheader("📊 能源化工板块 - 公司占市场比重")
+
+    try:
+        if '板块' in df_vol_market.columns:
+            df_vol_market_energy = df_vol_market[df_vol_market['板块'] == '能源化工']
+            df_vol_company_energy = df_vol_company[df_vol_company['板块'] == '能源化工']
+            df_amt_market_energy = df_amt_market[df_amt_market['板块'] == '能源化工']
+            df_amt_company_energy = df_amt_company[df_amt_company['板块'] == '能源化工']
+            df_oi_market_energy = df_oi_market[df_oi_market['板块'] == '能源化工']
+            df_oi_company_energy = df_oi_company[df_oi_company['板块'] == '能源化工']
+        else:
+            energy_exchanges = ['上期所', '能源中心']
+            df_vol_market_energy = df_vol_market[df_vol_market['交易所'].isin(energy_exchanges)] if '交易所' in df_vol_market.columns else pd.DataFrame()
+            df_vol_company_energy = df_vol_company[df_vol_company['交易所'].isin(energy_exchanges)] if '交易所' in df_vol_company.columns else pd.DataFrame()
+            df_amt_market_energy = df_amt_market[df_amt_market['交易所'].isin(energy_exchanges)] if '交易所' in df_amt_market.columns else pd.DataFrame()
+            df_amt_company_energy = df_amt_company[df_amt_company['交易所'].isin(energy_exchanges)] if '交易所' in df_amt_company.columns else pd.DataFrame()
+            df_oi_market_energy = df_oi_market[df_oi_market['交易所'].isin(energy_exchanges)] if '交易所' in df_oi_market.columns else pd.DataFrame()
+            df_oi_company_energy = df_oi_company[df_oi_company['交易所'].isin(energy_exchanges)] if '交易所' in df_oi_company.columns else pd.DataFrame()
+        
+        date_cols_all = get_month_columns(df_vol_market)
+        filtered_cols = []
+        for col in date_cols_all:
+            year, _ = parse_month_column(col)
+            if year and year >= 2024:
+                filtered_cols.append(col)
+        
+        data_by_month_energy = {}
+        for col in filtered_cols:
+            year, month = parse_month_column(col)
+            if year and month:
+                data_by_month_energy.setdefault(month, {}).setdefault(year, {})
+                
+                vol_market = df_vol_market_energy[col].sum() if not df_vol_market_energy.empty else 0
+                vol_company = df_vol_company_energy[col].sum() if not df_vol_company_energy.empty else 0
+                amt_market = df_amt_market_energy[col].sum() if not df_amt_market_energy.empty else 0
+                amt_company = df_amt_company_energy[col].sum() if not df_amt_company_energy.empty else 0
+                oi_market = df_oi_market_energy[col].sum() if not df_oi_market_energy.empty else 0
+                oi_company = df_oi_company_energy[col].sum() if not df_oi_company_energy.empty else 0
+                
+                data_by_month_energy[month][year]['成交量'] = safe_division(vol_company, vol_market * 2) * 100
+                data_by_month_energy[month][year]['成交额'] = safe_division(amt_company / 100000000, amt_market * 2) * 100
+                data_by_month_energy[month][year]['持仓量'] = safe_division(oi_company, oi_market * 2) * 100
+        
+        all_years = sorted({y for month_data in data_by_month_energy.values() for y in month_data.keys()})
+        latest_year = max(all_years) if all_years else 2024
+        
+        plot_data_energy = []
+        for month in sorted(data_by_month_energy.keys()):
+            for year in sorted(data_by_month_energy[month].keys()):
+                for metric in ['成交量', '成交额', '持仓量']:
+                    value = data_by_month_energy[month][year].get(metric, 0)
+                    if value > 0:
+                        plot_data_energy.append({
+                            '月份': MONTH_NAMES.get(month, str(month)),
+                            '年份': str(year) + '年',
+                            '指标': metric,
+                            '占比（%）': value
+                        })
+        
+        if plot_data_energy:
+            plot_df_energy = pd.DataFrame(plot_data_energy)
+            selected_metric_energy = st.selectbox(
+                "选择查看指标",
+                options=['成交量', '成交额', '持仓量'],
+                key="metric_selector_energy"
+            )
+            color_map_energy = {
+                str(latest_year - 2) + '年': '#2E86C1',
+                str(latest_year - 1) + '年': '#F39C12',
+                str(latest_year) + '年': '#28B463'
+            }
+            metric_df_energy = plot_df_energy[plot_df_energy['指标'] == selected_metric_energy]
+            color_map_energy = {k: v for k, v in color_map_energy.items() if k in metric_df_energy['年份'].unique()}
+            
+            if not metric_df_energy.empty:
+                st.subheader(f"📈 能源化工板块 - {selected_metric_energy}公司占市场比重")
+                decimal_places = 4 if selected_metric_energy == '成交额' else 3
+                fig = px.line(
+                    metric_df_energy,
+                    x='月份',
+                    y='占比（%）',
+                    color='年份',
+                    title=f'能源化工板块 - {selected_metric_energy}公司占市场比重',
+                    labels={'月份': '月份', '占比（%）': '占比（%）', '年份': '年份'},
+                    color_discrete_map=color_map_energy,
+                    category_orders={'月份': ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']}
+                )
+                fig.update_yaxes(tickformat=f'.{decimal_places}f', title_text='占比（%）')
+                fig.update_xaxes(tickvals=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'])
+                fig.update_traces(
+                    texttemplate=f'%{{y:.{decimal_places}f}}',
+                    textposition='top center',
+                    textfont=dict(size=10),
+                    mode='lines+markers+text'
+                )
+                fig.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white',
+                    height=400,
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info(f"暂无能源化工板块{selected_metric_energy}数据")
+            
+            with st.expander("📋 查看详细数据"):
+                decimal_display = 4 if selected_metric_energy == '成交额' else 3
+                table_data = []
+                for month in sorted(data_by_month_energy.keys()):
+                    row = {'月份': MONTH_NAMES.get(month, str(month))}
+                    for year in sorted(data_by_month_energy[month].keys()):
+                        key = f"{year}年{selected_metric_energy}"
+                        val = data_by_month_energy[month][year].get(selected_metric_energy, 0)
+                        row[key] = f"{val:.{decimal_display}f}"
+                    table_data.append(row)
+                table_df_energy = pd.DataFrame(table_data)
+                st.dataframe(table_df_energy, use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无能源化工板块公司占市场比重数据")
+    except Exception as e:
+        st.warning(f"无法加载能源化工板块对比数据: {e}")
 
     # ============================================================
     # 各板块分析
@@ -725,9 +1017,7 @@ try:
                 compare_label1 = '环比' if time_dimension != '年度' else '同比'
                 compare_label2 = '同比' if time_dimension != '年度' else '-'
                 
-                # 构建包含原始数值的DataFrame
                 table_data = []
-                # 添加合计行
                 total_row = {
                     '维度': '合计',
                     f'{group_data_type}': total['current'],
@@ -736,7 +1026,6 @@ try:
                 }
                 table_data.append(total_row)
                 
-                # 添加各板块数据
                 for _, row in df_plot.iterrows():
                     table_data.append({
                         '维度': row[group_col],
@@ -747,7 +1036,6 @@ try:
                 
                 df_table = pd.DataFrame(table_data)
                 
-                # 使用column_config格式化显示
                 st.dataframe(
                     df_table,
                     use_container_width=True,
@@ -768,6 +1056,1021 @@ try:
                         )
                     }
                 )
+
+    # ============================================================
+    # 市场各板块份额饼图 + 公司占有率柱状图（并列）
+    # ============================================================
+    st.subheader("📊 市场各板块分析")
+    
+    # 获取日期列和标签
+    date_cols = get_month_columns(df_vol_market)
+    date_labels = {col: f"{str(col)[:4]}年{str(col)[4:6]}月" for col in sorted(date_cols)}
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        pie_month_options = sorted(date_cols, reverse=True)
+        pie_month_labels = {col: date_labels.get(col, str(col)) for col in pie_month_options}
+        
+        selected_pie_month = st.selectbox(
+            "选择月份",
+            options=pie_month_options,
+            format_func=lambda x: pie_month_labels.get(x, str(x)),
+            key="pie_month_selector"
+        )
+    with col2:
+        pie_data_type = st.radio(
+            "选择指标",
+            options=['成交量', '成交额', '持仓量'],
+            horizontal=True,
+            key="pie_data_type"
+        )
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        pie_market_df = df_vol_market.copy()
+        pie_company_df = df_vol_company.copy()
+        pie_unit = '亿手'
+        pie_title = '成交量'
+    elif pie_data_type == '成交额':
+        pie_market_df = df_amt_market.copy()
+        pie_company_df = df_amt_company.copy()
+        pie_unit = '万亿元'
+        pie_title = '成交额'
+    else:  # 持仓量
+        pie_market_df = df_oi_market.copy()
+        pie_company_df = df_oi_company.copy()
+        pie_unit = '百万手'
+        pie_title = '持仓量'
+    
+    # 清理市场数据
+    pie_market_df = clean_dataframe(pie_market_df)
+    pie_company_df = clean_dataframe(pie_company_df)
+    
+    # 检查选中的月份是否存在
+    if selected_pie_month in pie_market_df.columns and selected_pie_month in pie_company_df.columns:
+        if '板块' in pie_market_df.columns:
+            pie_market_grouped = pie_market_df.groupby('板块')[selected_pie_month].sum().reset_index()
+            pie_market_grouped.columns = ['板块', '市场数值']
+            
+            pie_company_grouped = pie_company_df.groupby('板块')[selected_pie_month].sum().reset_index()
+            pie_company_grouped.columns = ['板块', '公司数值']
+            
+            pie_merged = pd.merge(pie_market_grouped, pie_company_grouped, on='板块', how='outer').fillna(0)
+            
+            if pie_data_type == '成交额':
+                pie_merged['公司占比（%）'] = ((pie_merged['公司数值'] / 100000000) / (pie_merged['市场数值'] * 2) * 100).round(4)
+            else:
+                pie_merged['公司占比（%）'] = (pie_merged['公司数值'] / (pie_merged['市场数值'] * 2) * 100).round(4)
+            
+            pie_merged['公司占比（%）'] = pie_merged.apply(
+                lambda row: 0 if row['市场数值'] == 0 else row['公司占比（%）'], 
+                axis=1
+            )
+            
+            total_market = pie_merged['市场数值'].sum()
+            
+            if total_market > 0:
+                pie_merged['市场占比（%）'] = (pie_merged['市场数值'] / total_market * 100).round(2)
+                
+                pie_data = pie_merged[['板块', '市场数值', '市场占比（%）']].copy()
+                bar_data = pie_merged[['板块', '公司占比（%）']].copy()
+                bar_data = bar_data.sort_values('公司占比（%）', ascending=True)
+                
+                col_left, col_right = st.columns([1, 1], gap="medium")
+                
+                with col_left:
+                    fig_pie = px.pie(
+                        pie_data,
+                        values='市场数值',
+                        names='板块',
+                        title=f'市场各板块{pie_title}份额',
+                        hover_data={'市场数值': True, '市场占比（%）': True},
+                        labels={'市场数值': f'{pie_title}（{pie_unit}）', '市场占比（%）': '占比（%）'},
+                        hole=0.3
+                    )
+                    fig_pie.update_layout(
+                        title_font=dict(size=16, color='#1A5276'),
+                        font=dict(size=12),
+                        legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                        height=450
+                    )
+                    fig_pie.update_traces(
+                        textinfo='percent+label',
+                        texttemplate='%{label}<br>%{percent:.2%}',
+                        textfont=dict(size=11),
+                        marker=dict(line=dict(color='white', width=2)),
+                        pull=[0.03 if i == 0 else 0 for i in range(len(pie_data))]
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True, config={'displayModeBar': False})
+                
+                with col_right:
+                    bar_data_sorted = bar_data.sort_values('公司占比（%）', ascending=False)
+                    max_val = bar_data_sorted['公司占比（%）'].max()
+                    
+                    fig_bar = px.bar(
+                        bar_data_sorted,
+                        x='公司占比（%）',
+                        y='板块',
+                        orientation='h',
+                        title=f'各板块{pie_title}公司占有率',
+                        labels={'公司占比（%）': '公司占市场比重（%）', '板块': ''},
+                        text='公司占比（%）',
+                        color='公司占比（%）',
+                        color_continuous_scale='Blues',
+                        range_color=[0, max_val * 1.2 if max_val > 0 else 1]
+                    )
+                    fig_bar.update_layout(
+                        title_font=dict(size=16, color='#1A5276'),
+                        font=dict(size=12),
+                        xaxis=dict(
+                            title='公司占市场比重（%）',
+                            tickformat='.4f',
+                            range=[0, max_val * 1.3 if max_val > 0 else 1]
+                        ),
+                        yaxis=dict(title='', categoryorder='total ascending'),
+                        height=450,
+                        showlegend=False,
+                        coloraxis_showscale=False,
+                        plot_bgcolor='#F8F9F9',
+                        paper_bgcolor='white'
+                    )
+                    fig_bar.update_traces(
+                        texttemplate='%{x:.4f}%',
+                        textposition='outside',
+                        textfont=dict(size=11, color='black'),
+                        marker=dict(line=dict(color='white', width=1))
+                    )
+                    st.plotly_chart(fig_bar, use_container_width=True, config={'displayModeBar': False})
+                
+                with st.expander("📋 查看详细数据"):
+                    display_df = pie_merged.copy()
+                    
+                    if pie_data_type == '成交量':
+                        market_unit_display = '手'
+                        company_unit_display = '手'
+                    elif pie_data_type == '成交额':
+                        market_unit_display = '亿'
+                        company_unit_display = '亿'
+                        display_df['公司数值'] = display_df['公司数值'] / 100000000
+                    else:  # 持仓量
+                        market_unit_display = '手'
+                        company_unit_display = '手'
+                    
+                    display_cols = ['板块', '市场数值', '公司数值', '公司占比（%）', '市场占比（%）']
+                    display_df_final = display_df[display_cols].copy()
+                    display_df_final.columns = ['板块', f'市场数值（{market_unit_display}）', f'公司数值（{company_unit_display}）', '公司占比（%）', '市场占比（%）']
+                    
+                    st.dataframe(
+                        display_df_final,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "板块": st.column_config.TextColumn("板块"),
+                            f"市场数值（{market_unit_display}）": st.column_config.NumberColumn(
+                                f"市场数值（{market_unit_display}）",
+                                format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                            ),
+                            f"公司数值（{company_unit_display}）": st.column_config.NumberColumn(
+                                f"公司数值（{company_unit_display}）",
+                                format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                            ),
+                            "公司占比（%）": st.column_config.NumberColumn(
+                                "公司占比（%）",
+                                format="%.4f%%"
+                            ),
+                            "市场占比（%）": st.column_config.NumberColumn(
+                                "市场占比（%）",
+                                format="%.2f%%"
+                            )
+                        }
+                    )
+            else:
+                st.warning("该月份市场数据为空，请选择其他月份")
+        else:
+            st.warning("数据中无'板块'列，请检查数据")
+    else:
+        st.warning(f"选中的月份 {selected_pie_month} 不存在于数据中")
+    
+    # ============================================================
+    # 期货品种分析-市场
+    # ============================================================
+    st.subheader("📊 期货品种分析-市场")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        future_market_df = df_vol_market.copy()
+        future_company_df = df_vol_company.copy()
+        future_unit = '亿手'
+        future_title = '成交量'
+    elif pie_data_type == '成交额':
+        future_market_df = df_amt_market.copy()
+        future_company_df = df_amt_company.copy()
+        future_unit = '万亿元'
+        future_title = '成交额'
+    else:  # 持仓量
+        future_market_df = df_oi_market.copy()
+        future_company_df = df_oi_company.copy()
+        future_unit = '百万手'
+        future_title = '持仓量'
+    
+    # 清理数据
+    future_market_df = clean_dataframe(future_market_df)
+    future_company_df = clean_dataframe(future_company_df)
+    
+    # ===== 筛选期货品种（产品类型 == '期货'） =====
+    if '产品类型' in future_market_df.columns:
+        future_market_df = future_market_df[future_market_df['产品类型'] == '期货']
+        future_company_df = future_company_df[future_company_df['产品类型'] == '期货']
+    else:
+        st.warning("⚠️ 数据中无'产品类型'列，无法筛选期货品种")
+    
+    # 检查选中的月份是否存在
+    if not future_market_df.empty:
+        month_exists_in_market = selected_pie_month in future_market_df.columns
+        month_exists_in_company = selected_pie_month in future_company_df.columns
+        
+        if not month_exists_in_market:
+            st.warning(f"⚠️ 选中的月份 {selected_pie_month} 不存在于期货市场数据中")
+            # 尝试找一个存在的月份
+            available_months = [col for col in future_market_df.columns if isinstance(col, (int, float)) or (isinstance(col, str) and col.isdigit())]
+            if available_months:
+                fallback_month = available_months[0]
+                st.info(f"📌 使用替代月份: {fallback_month}")
+                actual_month = fallback_month
+            else:
+                st.warning("无可用月份数据")
+                actual_month = None
+        else:
+            actual_month = selected_pie_month
+        
+        if actual_month is not None and actual_month in future_market_df.columns and actual_month in future_company_df.columns:
+            # 按品种分组汇总
+            if '产品名称' in future_market_df.columns:
+                future_market_grouped = future_market_df.groupby('产品名称')[actual_month].sum().reset_index()
+                future_market_grouped.columns = ['品种', '市场数值']
+                future_company_grouped = future_company_df.groupby('产品名称')[actual_month].sum().reset_index()
+                future_company_grouped.columns = ['品种', '公司数值']
+            else:
+                st.warning("⚠️ 未找到'产品名称'列")
+                future_market_grouped = None
+            
+            if future_market_grouped is not None and not future_market_grouped.empty:
+                future_merged = pd.merge(future_market_grouped, future_company_grouped, on='品种', how='outer').fillna(0)
+                
+                # 成交额处理：公司数值从元转亿元
+                if pie_data_type == '成交额':
+                    future_merged['公司数值'] = future_merged['公司数值'] / 100000000
+                
+                # 计算公司占比
+                future_merged['公司占比（%）'] = (future_merged['公司数值'] / (future_merged['市场数值'] * 2) * 100).round(4)
+                future_merged['公司占比（%）'] = future_merged.apply(
+                    lambda row: 0 if row['市场数值'] == 0 else row['公司占比（%）'], 
+                    axis=1
+                )
+                
+                # 按市场数值降序排列，取前十，其余归为"其他"
+                future_merged_sorted = future_merged.sort_values('市场数值', ascending=False).reset_index(drop=True)
+                
+                if len(future_merged_sorted) > 10:
+                    top_10 = future_merged_sorted.head(10).copy()
+                    other_market = future_merged_sorted.iloc[10:]['市场数值'].sum()
+                    other_company = future_merged_sorted.iloc[10:]['公司数值'].sum()
+                    other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+                    
+                    other_row = pd.DataFrame({
+                        '品种': ['其他'],
+                        '市场数值': [other_market],
+                        '公司数值': [other_company],
+                        '公司占比（%）': [other_ratio]
+                    })
+                    future_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+                else:
+                    future_merged_top = future_merged_sorted.copy()
+                
+                # 计算市场占比
+                total_market_future = future_merged_top['市场数值'].sum()
+                
+                if total_market_future > 0:
+                    future_merged_top['市场占比（%）'] = (future_merged_top['市场数值'] / total_market_future * 100).round(2)
+                    
+                    pie_data_future = future_merged_top[['品种', '市场数值', '市场占比（%）']].copy()
+                    bar_data_future = future_merged_top[['品种', '公司占比（%）']].copy()
+                    bar_data_future = bar_data_future.sort_values('公司占比（%）', ascending=True)
+                    
+                    col_left_future, col_right_future = st.columns([1, 1], gap="medium")
+                    
+                    # ===== 左侧：饼图 =====
+                    with col_left_future:
+                        fig_pie_future = px.pie(
+                            pie_data_future,
+                            values='市场数值',
+                            names='品种',
+                            title=f'期货品种{future_title}份额（TOP10+其他）',
+                            hover_data={'市场数值': True, '市场占比（%）': True},
+                            labels={'市场数值': f'{future_title}（{future_unit}）', '市场占比（%）': '占比（%）'},
+                            hole=0.3
+                        )
+                        fig_pie_future.update_layout(
+                            title_font=dict(size=16, color='#1A5276'),
+                            font=dict(size=12),
+                            legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                            height=450
+                        )
+                        fig_pie_future.update_traces(
+                            textinfo='percent+label',
+                            texttemplate='%{label}<br>%{percent:.2%}',
+                            textfont=dict(size=10),
+                            marker=dict(line=dict(color='white', width=2)),
+                            pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_future))]
+                        )
+                        st.plotly_chart(fig_pie_future, use_container_width=True, config={'displayModeBar': False})
+                    
+                    # ===== 右侧：横向柱状图 =====
+                    with col_right_future:
+                        bar_data_sorted_future = bar_data_future.sort_values('公司占比（%）', ascending=False)
+                        max_val_future = bar_data_sorted_future['公司占比（%）'].max()
+                        
+                        fig_bar_future = px.bar(
+                            bar_data_sorted_future,
+                            x='公司占比（%）',
+                            y='品种',
+                            orientation='h',
+                            title=f'期货品种{future_title}公司占有率（TOP10+其他）',
+                            labels={'公司占比（%）': '公司占市场比重（%）', '品种': ''},
+                            text='公司占比（%）',
+                            color='公司占比（%）',
+                            color_continuous_scale='Blues',
+                            range_color=[0, max_val_future * 1.2 if max_val_future > 0 else 1]
+                        )
+                        fig_bar_future.update_layout(
+                            title_font=dict(size=16, color='#1A5276'),
+                            font=dict(size=12),
+                            xaxis=dict(
+                                title='公司占市场比重（%）',
+                                tickformat='.4f',
+                                range=[0, max_val_future * 1.3 if max_val_future > 0 else 1]
+                            ),
+                            yaxis=dict(title='', categoryorder='total ascending'),
+                            height=450,
+                            showlegend=False,
+                            coloraxis_showscale=False,
+                            plot_bgcolor='#F8F9F9',
+                            paper_bgcolor='white'
+                        )
+                        fig_bar_future.update_traces(
+                            texttemplate='%{x:.4f}%',
+                            textposition='outside',
+                            textfont=dict(size=11, color='black'),
+                            marker=dict(line=dict(color='white', width=1))
+                        )
+                        st.plotly_chart(fig_bar_future, use_container_width=True, config={'displayModeBar': False})
+                    
+                    # ===== 数据表格 =====
+                    with st.expander("📋 查看详细数据"):
+                        display_df_future = future_merged_top.copy()
+                        
+                        if pie_data_type == '成交量':
+                            market_unit_display_future = '手'
+                            company_unit_display_future = '手'
+                        elif pie_data_type == '成交额':
+                            market_unit_display_future = '亿元'
+                            company_unit_display_future = '亿元'
+                        else:  # 持仓量
+                            market_unit_display_future = '手'
+                            company_unit_display_future = '手'
+                        
+                        display_cols_future = ['品种', '市场数值', '公司数值', '公司占比（%）', '市场占比（%）']
+                        display_df_future_final = display_df_future[display_cols_future].copy()
+                        display_df_future_final.columns = ['品种', f'市场数值（{market_unit_display_future}）', f'公司数值（{company_unit_display_future}）', '公司占比（%）', '市场占比（%）']
+                        
+                        st.dataframe(
+                            display_df_future_final,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "品种": st.column_config.TextColumn("品种"),
+                                f"市场数值（{market_unit_display_future}）": st.column_config.NumberColumn(
+                                    f"市场数值（{market_unit_display_future}）",
+                                    format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                                ),
+                                f"公司数值（{company_unit_display_future}）": st.column_config.NumberColumn(
+                                    f"公司数值（{company_unit_display_future}）",
+                                    format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                                ),
+                                "公司占比（%）": st.column_config.NumberColumn(
+                                    "公司占比（%）",
+                                    format="%.4f%%"
+                                ),
+                                "市场占比（%）": st.column_config.NumberColumn(
+                                    "市场占比（%）",
+                                    format="%.2f%%"
+                                )
+                            }
+                        )
+                else:
+                    st.warning("该月份期货市场总值为0，请选择其他月份")
+            else:
+                st.warning("期货品种数据为空，请检查数据")
+        else:
+            if actual_month is None:
+                st.warning("无法找到可用的月份数据")
+            else:
+                st.warning(f"月份 {actual_month} 在期货数据中不存在")
+    else:
+        st.info("📊 当前数据中没有期货品种（产品类型='期货'），跳过期货品种分析")
+    
+    # ============================================================
+    # 期权品种分析-市场
+    # ============================================================
+    st.subheader("📊 期权品种分析-市场")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        option_market_df = df_vol_market.copy()
+        option_company_df = df_vol_company.copy()
+        option_unit = '亿手'
+        option_title = '成交量'
+    elif pie_data_type == '成交额':
+        option_market_df = df_amt_market.copy()
+        option_company_df = df_amt_company.copy()
+        option_unit = '万亿元'
+        option_title = '成交额'
+    else:  # 持仓量
+        option_market_df = df_oi_market.copy()
+        option_company_df = df_oi_company.copy()
+        option_unit = '百万手'
+        option_title = '持仓量'
+    
+    # 筛选期权品种（产品类型 == '期货期权' 或 '现货期权'）
+    if '产品类型' in option_market_df.columns:
+        option_market_df = option_market_df[option_market_df['产品类型'].isin(['期货期权', '现货期权'])]
+        option_company_df = option_company_df[option_company_df['产品类型'].isin(['期货期权', '现货期权'])]
+    
+    # 清理数据
+    option_market_df = clean_dataframe(option_market_df)
+    option_company_df = clean_dataframe(option_company_df)
+    
+    # 检查选中的月份是否存在
+    if selected_pie_month in option_market_df.columns and selected_pie_month in option_company_df.columns:
+        # 按品种分组汇总
+        option_market_grouped = option_market_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_market_grouped.columns = ['品种', '市场数值']
+        
+        option_company_grouped = option_company_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_company_grouped.columns = ['品种', '公司数值']
+        
+        option_merged = pd.merge(option_market_grouped, option_company_grouped, on='品种', how='outer').fillna(0)
+        
+        if pie_data_type == '成交额':
+            option_merged['公司数值'] = option_merged['公司数值'] / 100000000
+        
+        # 计算公司占比（四位小数）
+        option_merged['公司占比（%）'] = (option_merged['公司数值'] / (option_merged['市场数值'] * 2) * 100).round(4)
+        option_merged['公司占比（%）'] = option_merged.apply(
+            lambda row: 0 if row['市场数值'] == 0 else row['公司占比（%）'], 
+            axis=1
+        )
+        
+        # 按市场数值降序排列，取前十，其余归为"其他"
+        option_merged_sorted = option_merged.sort_values('市场数值', ascending=False).reset_index(drop=True)
+        
+        if len(option_merged_sorted) > 10:
+            top_10 = option_merged_sorted.head(10).copy()
+            other_market = option_merged_sorted.iloc[10:]['市场数值'].sum()
+            other_company = option_merged_sorted.iloc[10:]['公司数值'].sum()
+            other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+            
+            other_row = pd.DataFrame({
+                '品种': ['其他'],
+                '市场数值': [other_market],
+                '公司数值': [other_company],
+                '公司占比（%）': [other_ratio]
+            })
+            option_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+        else:
+            option_merged_top = option_merged_sorted.copy()
+        
+        # 计算市场占比
+        total_market_option = option_merged_top['市场数值'].sum()
+        
+        if total_market_option > 0:
+            option_merged_top['市场占比（%）'] = (option_merged_top['市场数值'] / total_market_option * 100).round(2)
+            
+            pie_data_option = option_merged_top[['品种', '市场数值', '市场占比（%）']].copy()
+            bar_data_option = option_merged_top[['品种', '公司占比（%）']].copy()
+            bar_data_option = bar_data_option.sort_values('公司占比（%）', ascending=True)
+            
+            col_left_option, col_right_option = st.columns([1, 1], gap="medium")
+            
+            with col_left_option:
+                fig_pie_option = px.pie(
+                    pie_data_option,
+                    values='市场数值',
+                    names='品种',
+                    title=f'期权品种{option_title}份额（TOP10+其他）',
+                    hover_data={'市场数值': True, '市场占比（%）': True},
+                    labels={'市场数值': f'{option_title}（{option_unit}）', '市场占比（%）': '占比（%）'},
+                    hole=0.3
+                )
+                fig_pie_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                    height=450
+                )
+                fig_pie_option.update_traces(
+                    textinfo='percent+label',
+                    texttemplate='%{label}<br>%{percent:.2%}',
+                    textfont=dict(size=10),
+                    marker=dict(line=dict(color='white', width=2)),
+                    pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_option))]
+                )
+                st.plotly_chart(fig_pie_option, use_container_width=True, config={'displayModeBar': False})
+            
+            with col_right_option:
+                bar_data_sorted_option = bar_data_option.sort_values('公司占比（%）', ascending=False)
+                max_val_option = bar_data_sorted_option['公司占比（%）'].max()
+                
+                fig_bar_option = px.bar(
+                    bar_data_sorted_option,
+                    x='公司占比（%）',
+                    y='品种',
+                    orientation='h',
+                    title=f'期权品种{option_title}公司占有率（TOP10+其他）',
+                    labels={'公司占比（%）': '公司占市场比重（%）', '品种': ''},
+                    text='公司占比（%）',
+                    color='公司占比（%）',
+                    color_continuous_scale='Blues',
+                    range_color=[0, max_val_option * 1.2 if max_val_option > 0 else 1]
+                )
+                fig_bar_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    xaxis=dict(
+                        title='公司占市场比重（%）',
+                        tickformat='.4f',
+                        range=[0, max_val_option * 1.3 if max_val_option > 0 else 1]
+                    ),
+                    yaxis=dict(title='', categoryorder='total ascending'),
+                    height=450,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white'
+                )
+                fig_bar_option.update_traces(
+                    texttemplate='%{x:.4f}%',
+                    textposition='outside',
+                    textfont=dict(size=11, color='black'),
+                    marker=dict(line=dict(color='white', width=1))
+                )
+                st.plotly_chart(fig_bar_option, use_container_width=True, config={'displayModeBar': False})
+            
+            with st.expander("📋 查看详细数据"):
+                display_df_option = option_merged_top.copy()
+                
+                if pie_data_type == '成交量':
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                elif pie_data_type == '成交额':
+                    market_unit_display_option = '亿元'
+                    company_unit_display_option = '亿元'
+                else:
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                
+                display_cols_option = ['品种', '市场数值', '公司数值', '公司占比（%）', '市场占比（%）']
+                display_df_option_final = display_df_option[display_cols_option].copy()
+                display_df_option_final.columns = ['品种', f'市场数值（{market_unit_display_option}）', f'公司数值（{company_unit_display_option}）', '公司占比（%）', '市场占比（%）']
+                
+                st.dataframe(
+                    display_df_option_final,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "品种": st.column_config.TextColumn("品种"),
+                        f"市场数值（{market_unit_display_option}）": st.column_config.NumberColumn(
+                            f"市场数值（{market_unit_display_option}）",
+                            format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                        ),
+                        f"公司数值（{company_unit_display_option}）": st.column_config.NumberColumn(
+                            f"公司数值（{company_unit_display_option}）",
+                            format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                        ),
+                        "公司占比（%）": st.column_config.NumberColumn(
+                            "公司占比（%）",
+                            format="%.4f%%"
+                        ),
+                        "市场占比（%）": st.column_config.NumberColumn(
+                            "市场占比（%）",
+                            format="%.2f%%"
+                        )
+                    }
+                )
+        else:
+            st.warning("该月份期权数据为空，请选择其他月份")
+    else:
+        st.warning(f"选中的月份 {selected_pie_month} 不存在于期权数据中")
+
+    # ============================================================
+    # 期货品种分析-公司
+    # ============================================================
+    st.subheader("📊 期货品种分析-公司")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        company_market_df = df_vol_market.copy()
+        company_company_df = df_vol_company.copy()
+        company_unit = '手'
+        company_title = '成交量'
+    elif pie_data_type == '成交额':
+        company_market_df = df_amt_market.copy()
+        company_company_df = df_amt_company.copy()
+        company_unit = '元'
+        company_title = '成交额'
+    else:  # 持仓量
+        company_market_df = df_oi_market.copy()
+        company_company_df = df_oi_company.copy()
+        company_unit = '手'
+        company_title = '持仓量'
+    
+    # 筛选期货品种（产品类型 == '期货'）
+    if '产品类型' in company_market_df.columns:
+        company_market_df = company_market_df[company_market_df['产品类型'] == '期货']
+        company_company_df = company_company_df[company_company_df['产品类型'] == '期货']
+    
+    # 清理数据
+    company_market_df = clean_dataframe(company_market_df)
+    company_company_df = clean_dataframe(company_company_df)
+    
+    if not company_market_df.empty and selected_pie_month in company_market_df.columns and selected_pie_month in company_company_df.columns:
+        company_market_grouped = company_market_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        company_market_grouped.columns = ['品种', '市场数值']
+        
+        company_company_grouped = company_company_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        company_company_grouped.columns = ['品种', '公司数值']
+        
+        company_merged = pd.merge(company_market_grouped, company_company_grouped, on='品种', how='outer').fillna(0)
+        
+        # 成交额处理：公司数值从元转亿元
+        if pie_data_type == '成交额':
+            company_merged['公司数值'] = company_merged['公司数值'] / 100000000
+        
+        # 计算公司占市场比重（用于右侧柱状图）
+        company_merged['公司占市场比重（%）'] = (company_merged['公司数值'] / (company_merged['市场数值'] * 2) * 100).round(4)
+        company_merged['公司占市场比重（%）'] = company_merged.apply(
+            lambda row: 0 if row['市场数值'] == 0 else row['公司占市场比重（%）'], 
+            axis=1
+        )
+        
+        # ★★★ 按公司数值降序排列（饼图按公司份额排序）★★★
+        company_merged_sorted = company_merged.sort_values('公司数值', ascending=False).reset_index(drop=True)
+        
+        if len(company_merged_sorted) > 10:
+            top_10 = company_merged_sorted.head(10).copy()
+            other_market = company_merged_sorted.iloc[10:]['市场数值'].sum()
+            other_company = company_merged_sorted.iloc[10:]['公司数值'].sum()
+            other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+            
+            other_row = pd.DataFrame({
+                '品种': ['其他'],
+                '市场数值': [other_market],
+                '公司数值': [other_company],
+                '公司占市场比重（%）': [other_ratio]
+            })
+            company_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+        else:
+            company_merged_top = company_merged_sorted.copy()
+        
+        total_market_company = company_merged_top['市场数值'].sum()
+        
+        if total_market_company > 0:
+            # 计算公司内部占比（饼图用）
+            total_company = company_merged_top['公司数值'].sum()
+            company_merged_top['公司内部占比（%）'] = (company_merged_top['公司数值'] / total_company * 100).round(2) if total_company > 0 else 0
+            
+            # ===== 饼图和柱状图左右并列 =====
+            col_left_company, col_right_company = st.columns([1, 1], gap="medium")
+            
+            # 左列：饼图（公司各品种份额）
+            with col_left_company:
+                pie_data_company = company_merged_top[['品种', '公司数值', '公司内部占比（%）']].copy()
+                fig_pie_company = px.pie(
+                    pie_data_company,
+                    values='公司数值',
+                    names='品种',
+                    title=f'公司期货{company_title}份额（TOP10）',
+                    hover_data={'公司数值': True, '公司内部占比（%）': True},
+                    labels={'公司数值': f'{company_title}（{company_unit}）', '公司内部占比（%）': '占比（%）'},
+                    hole=0.3
+                )
+                fig_pie_company.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                    height=450
+                )
+                fig_pie_company.update_traces(
+                    textinfo='percent+label',
+                    texttemplate='%{label}<br>%{percent:.2%}',
+                    textfont=dict(size=10),
+                    marker=dict(line=dict(color='white', width=2)),
+                    pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_company))]
+                )
+                st.plotly_chart(fig_pie_company, use_container_width=True, config={'displayModeBar': False})
+            
+            # 右列：柱状图（公司占市场比重）
+            with col_right_company:
+                bar_data_company = company_merged_top[['品种', '公司占市场比重（%）']].copy()
+                bar_data_sorted_company = bar_data_company.sort_values('公司占市场比重（%）', ascending=False)
+                max_val_company = bar_data_sorted_company['公司占市场比重（%）'].max()
+                
+                fig_bar_company = px.bar(
+                    bar_data_sorted_company,
+                    x='公司占市场比重（%）',
+                    y='品种',
+                    orientation='h',
+                    title=f'公司期货{company_title}占市场比重（TOP10）',
+                    labels={'公司占市场比重（%）': '公司占市场比重（%）', '品种': ''},
+                    text='公司占市场比重（%）',
+                    color='公司占市场比重（%）',
+                    color_continuous_scale='Blues',
+                    range_color=[0, max_val_company * 1.2 if max_val_company > 0 else 1]
+                )
+                fig_bar_company.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    xaxis=dict(
+                        title='公司占市场比重（%）',
+                        tickformat='.4f',
+                        range=[0, max_val_company * 1.3 if max_val_company > 0 else 1]
+                    ),
+                    yaxis=dict(title='', categoryorder='total ascending'),
+                    height=450,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white'
+                )
+                fig_bar_company.update_traces(
+                    texttemplate='%{x:.4f}%',
+                    textposition='outside',
+                    textfont=dict(size=11, color='black'),
+                    marker=dict(line=dict(color='white', width=1))
+                )
+                st.plotly_chart(fig_bar_company, use_container_width=True, config={'displayModeBar': False})
+            
+            # 数据表格
+            with st.expander("📋 查看详细数据"):
+                display_df_company = company_merged_top.copy()
+                # 确保表格按公司数值降序排列
+                display_df_company = display_df_company.sort_values('公司数值', ascending=False)
+                
+                if pie_data_type == '成交量':
+                    market_unit_display_company = '手'
+                    company_unit_display_company = '手'
+                elif pie_data_type == '成交额':
+                    market_unit_display_company = '亿元'
+                    company_unit_display_company = '亿元'
+                else:
+                    market_unit_display_company = '手'
+                    company_unit_display_company = '手'
+                
+                display_cols_company = ['品种', '市场数值', '公司数值', '公司内部占比（%）', '公司占市场比重（%）']
+                display_df_company_final = display_df_company[display_cols_company].copy()
+                display_df_company_final.columns = ['品种', f'市场数值（{market_unit_display_company}）', f'公司数值（{company_unit_display_company}）', '公司内部占比（%）', '公司占市场比重（%）']
+                
+                st.dataframe(
+                    display_df_company_final,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "品种": st.column_config.TextColumn("品种"),
+                        f"市场数值（{market_unit_display_company}）": st.column_config.NumberColumn(
+                            f"市场数值（{market_unit_display_company}）",
+                            format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                        ),
+                        f"公司数值（{company_unit_display_company}）": st.column_config.NumberColumn(
+                            f"公司数值（{company_unit_display_company}）",
+                            format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                        ),
+                        "公司内部占比（%）": st.column_config.NumberColumn(
+                            "公司内部占比（%）",
+                            format="%.2f%%"
+                        ),
+                        "公司占市场比重（%）": st.column_config.NumberColumn(
+                            "公司占市场比重（%）",
+                            format="%.4f%%"
+                        )
+                    }
+                )
+        else:
+            st.warning("该月份公司数据为空，请选择其他月份")
+    else:
+        if company_market_df.empty:
+            st.info("📊 当前数据中没有期货品种（产品类型='期货'），跳过期货品种分析")
+        else:
+            st.warning(f"选中的月份 {selected_pie_month} 不存在于公司数据中")
+
+    # ============================================================
+    # 期权品种分析-公司
+    # ============================================================
+    st.subheader("📊 期权品种分析-公司")
+    
+    # 根据饼图选择的数据类型加载对应的市场数据和公司数据
+    if pie_data_type == '成交量':
+        option_market_df = df_vol_market.copy()
+        option_company_df = df_vol_company.copy()
+        option_unit = '手'
+        option_title = '成交量'
+    elif pie_data_type == '成交额':
+        option_market_df = df_amt_market.copy()
+        option_company_df = df_amt_company.copy()
+        option_unit = '元'
+        option_title = '成交额'
+    else:  # 持仓量
+        option_market_df = df_oi_market.copy()
+        option_company_df = df_oi_company.copy()
+        option_unit = '手'
+        option_title = '持仓量'
+    
+    # 筛选期权品种（产品类型 == '期货期权' 或 '现货期权'）
+    if '产品类型' in option_market_df.columns:
+        option_market_df = option_market_df[option_market_df['产品类型'].isin(['期货期权', '现货期权'])]
+        option_company_df = option_company_df[option_company_df['产品类型'].isin(['期货期权', '现货期权'])]
+    
+    # 清理数据
+    option_market_df = clean_dataframe(option_market_df)
+    option_company_df = clean_dataframe(option_company_df)
+    
+    if not option_market_df.empty and selected_pie_month in option_market_df.columns and selected_pie_month in option_company_df.columns:
+        option_market_grouped = option_market_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_market_grouped.columns = ['品种', '市场数值']
+        
+        option_company_grouped = option_company_df.groupby('产品名称')[selected_pie_month].sum().reset_index()
+        option_company_grouped.columns = ['品种', '公司数值']
+        
+        option_merged = pd.merge(option_market_grouped, option_company_grouped, on='品种', how='outer').fillna(0)
+        
+        # 成交额处理：公司数值从元转亿元
+        if pie_data_type == '成交额':
+            option_merged['公司数值'] = option_merged['公司数值'] / 100000000
+        
+        # 计算公司占市场比重（用于右侧柱状图）
+        option_merged['公司占市场比重（%）'] = (option_merged['公司数值'] / (option_merged['市场数值'] * 2) * 100).round(4)
+        option_merged['公司占市场比重（%）'] = option_merged.apply(
+            lambda row: 0 if row['市场数值'] == 0 else row['公司占市场比重（%）'], 
+            axis=1
+        )
+        
+        # ★★★ 按公司数值降序排列（饼图按公司份额排序）★★★
+        option_merged_sorted = option_merged.sort_values('公司数值', ascending=False).reset_index(drop=True)
+        
+        if len(option_merged_sorted) > 10:
+            top_10 = option_merged_sorted.head(10).copy()
+            other_market = option_merged_sorted.iloc[10:]['市场数值'].sum()
+            other_company = option_merged_sorted.iloc[10:]['公司数值'].sum()
+            other_ratio = (other_company / (other_market * 2) * 100).round(4) if other_market != 0 else 0
+            
+            other_row = pd.DataFrame({
+                '品种': ['其他'],
+                '市场数值': [other_market],
+                '公司数值': [other_company],
+                '公司占市场比重（%）': [other_ratio]
+            })
+            option_merged_top = pd.concat([top_10, other_row], ignore_index=True)
+        else:
+            option_merged_top = option_merged_sorted.copy()
+        
+        total_market_option = option_merged_top['市场数值'].sum()
+        
+        if total_market_option > 0:
+            # 计算公司内部占比（饼图用）
+            total_company = option_merged_top['公司数值'].sum()
+            option_merged_top['公司内部占比（%）'] = (option_merged_top['公司数值'] / total_company * 100).round(2) if total_company > 0 else 0
+            
+            # ===== 饼图和柱状图左右并列 =====
+            col_left_option, col_right_option = st.columns([1, 1], gap="medium")
+            
+            # 左列：饼图（公司各品种份额）
+            with col_left_option:
+                pie_data_option = option_merged_top[['品种', '公司数值', '公司内部占比（%）']].copy()
+                fig_pie_option = px.pie(
+                    pie_data_option,
+                    values='公司数值',
+                    names='品种',
+                    title=f'公司期权{option_title}份额（TOP10）',
+                    hover_data={'公司数值': True, '公司内部占比（%）': True},
+                    labels={'公司数值': f'{option_title}（{option_unit}）', '公司内部占比（%）': '占比（%）'},
+                    hole=0.3
+                )
+                fig_pie_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    legend=dict(orientation='v', yanchor='middle', y=0.5, xanchor='right', x=1.0),
+                    height=450
+                )
+                fig_pie_option.update_traces(
+                    textinfo='percent+label',
+                    texttemplate='%{label}<br>%{percent:.2%}',
+                    textfont=dict(size=10),
+                    marker=dict(line=dict(color='white', width=2)),
+                    pull=[0.03 if i == 0 else 0 for i in range(len(pie_data_option))]
+                )
+                st.plotly_chart(fig_pie_option, use_container_width=True, config={'displayModeBar': False})
+            
+            # 右列：柱状图（公司占市场比重）
+            with col_right_option:
+                bar_data_option = option_merged_top[['品种', '公司占市场比重（%）']].copy()
+                bar_data_sorted_option = bar_data_option.sort_values('公司占市场比重（%）', ascending=False)
+                max_val_option = bar_data_sorted_option['公司占市场比重（%）'].max()
+                
+                fig_bar_option = px.bar(
+                    bar_data_sorted_option,
+                    x='公司占市场比重（%）',
+                    y='品种',
+                    orientation='h',
+                    title=f'公司期权{option_title}占市场比重（TOP10）',
+                    labels={'公司占市场比重（%）': '公司占市场比重（%）', '品种': ''},
+                    text='公司占市场比重（%）',
+                    color='公司占市场比重（%）',
+                    color_continuous_scale='Blues',
+                    range_color=[0, max_val_option * 1.2 if max_val_option > 0 else 1]
+                )
+                fig_bar_option.update_layout(
+                    title_font=dict(size=16, color='#1A5276'),
+                    font=dict(size=12),
+                    xaxis=dict(
+                        title='公司占市场比重（%）',
+                        tickformat='.4f',
+                        range=[0, max_val_option * 1.3 if max_val_option > 0 else 1]
+                    ),
+                    yaxis=dict(title='', categoryorder='total ascending'),
+                    height=450,
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    plot_bgcolor='#F8F9F9',
+                    paper_bgcolor='white'
+                )
+                fig_bar_option.update_traces(
+                    texttemplate='%{x:.4f}%',
+                    textposition='outside',
+                    textfont=dict(size=11, color='black'),
+                    marker=dict(line=dict(color='white', width=1))
+                )
+                st.plotly_chart(fig_bar_option, use_container_width=True, config={'displayModeBar': False})
+            
+            # 数据表格
+            with st.expander("📋 查看详细数据"):
+                display_df_option = option_merged_top.copy()
+                # 确保表格按公司数值降序排列
+                display_df_option = display_df_option.sort_values('公司数值', ascending=False)
+                
+                if pie_data_type == '成交量':
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                elif pie_data_type == '成交额':
+                    market_unit_display_option = '亿元'
+                    company_unit_display_option = '亿元'
+                else:
+                    market_unit_display_option = '手'
+                    company_unit_display_option = '手'
+                
+                display_cols_option = ['品种', '市场数值', '公司数值', '公司内部占比（%）', '公司占市场比重（%）']
+                display_df_option_final = display_df_option[display_cols_option].copy()
+                display_df_option_final.columns = ['品种', f'市场数值（{market_unit_display_option}）', f'公司数值（{company_unit_display_option}）', '公司内部占比（%）', '公司占市场比重（%）']
+                
+                st.dataframe(
+                    display_df_option_final,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "品种": st.column_config.TextColumn("品种"),
+                        f"市场数值（{market_unit_display_option}）": st.column_config.NumberColumn(
+                            f"市场数值（{market_unit_display_option}）",
+                            format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                        ),
+                        f"公司数值（{company_unit_display_option}）": st.column_config.NumberColumn(
+                            f"公司数值（{company_unit_display_option}）",
+                            format="%,.2f" if pie_data_type == '成交额' else "%,.0f"
+                        ),
+                        "公司内部占比（%）": st.column_config.NumberColumn(
+                            "公司内部占比（%）",
+                            format="%.2f%%"
+                        ),
+                        "公司占市场比重（%）": st.column_config.NumberColumn(
+                            "公司占市场比重（%）",
+                            format="%.4f%%"
+                        )
+                    }
+                )
+        else:
+            st.warning("该月份期权数据为空，请选择其他月份")
+    else:
+        if option_market_df.empty:
+            st.info("📊 当前数据中没有期权品种（产品类型='期货期权'或'现货期权'），跳过期权品种分析")
+        else:
+            st.warning(f"选中的月份 {selected_pie_month} 不存在于期权数据中")
 
     # ============================================================
     # 资金统计
@@ -914,6 +2217,9 @@ try:
                     fund_df_sorted['平仓盈亏（百万）'] = fund_df_sorted['平仓盈亏'] / 1000000
 
                     color_map_fund = {'今年': '#2E86C1', '去年': '#F39C12'}
+                    # 创建带标签的列用于图例显示
+                    fund_df_sorted['类型标签'] = fund_df_sorted['类型'].map({'今年': '今年', '去年': '去年'})
+                    color_map_fund_label = {'今年': '#2E86C1', '去年': '#F39C12'}
 
                     target_data = fund_df[fund_df['类型'] == '今年']
                     if selected_month:
@@ -958,8 +2264,8 @@ try:
                     rows = st.columns(2)
                     for idx, (col, title, ylabel, annotation, cumsum_text) in enumerate(charts):
                         with rows[idx % 2]:
-                            fig = create_line_chart(fund_df_sorted, '月份显示', col, '类型',
-                                                    title, '月份', ylabel, color_map_fund, '.2f')
+                            fig = create_line_chart(fund_df_sorted, '月份显示', col, '类型标签',
+                                                    title, '月份', ylabel, color_map_fund_label, '.2f')
                             if fig:
                                 if annotation:
                                     fig.add_annotation(x=0.98, y=0.98, xref='paper', yref='paper',
@@ -1019,17 +2325,19 @@ try:
                         if trade_customer_data:
                             customer_df = pd.DataFrame(trade_customer_data).sort_values('月份')
                             customer_df['月份显示'] = customer_df['月份'].astype(str).str[4:6]
+                            customer_df['类型标签'] = customer_df['类型'].map({'今年': '今年', '去年': '去年'})
 
-                            col_left, col_right = st.columns(2)
                             with col_left:
-                                fig = create_line_chart(customer_df, '月份显示', '盈利客户数', '类型',
-                                                        '盈利客户数（当月）', '月份', '客户数', color_map_fund, '.0f')
+                                fig = create_line_chart(customer_df, '月份显示', '盈利客户数', '类型标签',
+                                                        '盈利客户数（当月）', '月份', '客户数', color_map_fund_label, '.0f')
                                 if fig:
+                                    fig.update_layout(legend_title_text='')  # 清空图例标题
                                     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                             with col_right:
-                                fig = create_line_chart(customer_df, '月份显示', '交易客户数', '类型',
-                                                        '交易客户数（当月）', '月份', '客户数', color_map_fund, '.0f')
+                                fig = create_line_chart(customer_df, '月份显示', '交易客户数', '类型标签',
+                                                        '交易客户数（当月）', '月份', '客户数', color_map_fund_label, '.0f')
                                 if fig:
+                                    fig.update_layout(legend_title_text='')  # 清空图例标题
                                     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                     except Exception as e:
                         st.warning(f"加载客户数据时出错: {e}")
