@@ -3254,86 +3254,163 @@ if '市场权益' in data2_cache and not data2_cache['市场权益'].empty:
                         lambda x: f"{x[:4]}年{x[4:6]}月"
                     )
                     
-                    plot_data = []
+                    # ============================================================
+                    # 图1: 市场权益（柱状图 + 趋势线）
+                    # ============================================================
+                    st.subheader("📈 市场权益趋势（最近12个月）")
+                    
+                    # 准备市场权益数据
+                    market_data = []
                     for _, row in chart_df.iterrows():
                         if pd.notna(row['市场权益（百亿元）']):
-                            plot_data.append({
+                            market_data.append({
                                 '月份': row['年月显示'],
-                                '权益': row['市场权益（百亿元）'],
-                                '类型': '市场权益（百亿元）'
+                                '市场权益（百亿元）': row['市场权益（百亿元）']
                             })
+                    
+                    if market_data:
+                        market_df = pd.DataFrame(market_data)
+                        month_order = chart_df['年月显示'].tolist()
+                        market_df['月份'] = pd.Categorical(market_df['月份'], categories=month_order, ordered=True)
+                        market_df = market_df.sort_values('月份')
+                        
+                        # 创建柱状图 + 趋势线
+                        fig1 = px.bar(
+                            market_df,
+                            x='月份',
+                            y='市场权益（百亿元）',
+                            title='市场权益（百亿元）',
+                            labels={'市场权益（百亿元）': '市场权益（百亿元）', '月份': '月份'},
+                            text_auto='.2f',
+                            color_discrete_sequence=['#2E86C1']
+                        )
+                        
+                        # 添加趋势线（使用散点图+线）
+                        fig1.add_scatter(
+                            x=market_df['月份'],
+                            y=market_df['市场权益（百亿元）'],
+                            mode='lines+markers',
+                            name='趋势线',
+                            line=dict(color='#E74C3C', width=2, dash='dash'),
+                            marker=dict(color='#E74C3C', size=6)
+                        )
+                        
+                        fig1.update_layout(
+                            title_font=dict(size=16, color='#1A5276'),
+                            font=dict(size=13),
+                            bargap=0.3,
+                            plot_bgcolor='#F8F9F9',
+                            paper_bgcolor='white',
+                            yaxis=dict(tickformat='.2f', title='市场权益（百亿元）'),
+                            xaxis=dict(title='月份'),
+                            legend=dict(
+                                orientation='h',
+                                yanchor='bottom',
+                                y=1.02,
+                                xanchor='center',
+                                x=0.5
+                            )
+                        )
+                        
+                        fig1.update_traces(
+                            texttemplate='%{y:.2f}',
+                            textfont=dict(size=11, color='black', family='Arial Black'),
+                            textposition='outside',
+                            selector=dict(type='bar')
+                        )
+                        
+                        st.plotly_chart(fig1, use_container_width=True)
+                    else:
+                        st.info("暂无市场权益数据")
+                    
+                    # ============================================================
+                    # 图2: 公司权益 vs 市场中位数（柱状图，无趋势线）
+                    # ============================================================
+                    st.subheader("📊 公司权益 vs 市场中位数对比（最近12个月）")
+                    
+                    # 准备公司权益和中位数数据
+                    company_median_data = []
+                    for _, row in chart_df.iterrows():
                         if pd.notna(row['公司权益（亿元）']):
-                            plot_data.append({
+                            company_median_data.append({
                                 '月份': row['年月显示'],
                                 '权益': row['公司权益（亿元）'],
                                 '类型': '公司权益（亿元）'
                             })
                         if '中位数（亿元）' in row and pd.notna(row['中位数（亿元）']):
-                            plot_data.append({
+                            company_median_data.append({
                                 '月份': row['年月显示'],
                                 '权益': row['中位数（亿元）'],
-                                '类型': '中位数（亿元）'
+                                '类型': '市场中位数（亿元）'
                             })
                     
-                    if plot_data:
-                        plot_df = pd.DataFrame(plot_data)
-                        
+                    if company_median_data:
+                        cm_df = pd.DataFrame(company_median_data)
                         month_order = chart_df['年月显示'].tolist()
-                        plot_df['月份'] = pd.Categorical(plot_df['月份'], categories=month_order, ordered=True)
-                        plot_df = plot_df.sort_values('月份')
+                        cm_df['月份'] = pd.Categorical(cm_df['月份'], categories=month_order, ordered=True)
+                        cm_df = cm_df.sort_values('月份')
                         
-                        fig = px.bar(
-                            plot_df,
+                        fig2 = px.bar(
+                            cm_df,
                             x='月份',
                             y='权益',
                             color='类型',
                             barmode='group',
-                            title='市场权益（百亿元）vs 公司权益（亿元）vs 中位数（亿元）对比（最近12个月）',
+                            title='公司权益（亿元）vs 市场中位数（亿元）',
                             labels={'权益': '权益', '月份': '月份'},
                             text_auto='.2f',
                             color_discrete_map={
-                                '市场权益（百亿元）': '#2E86C1',
                                 '公司权益（亿元）': '#F39C12',
-                                '中位数（亿元）': '#28B463'
+                                '市场中位数（亿元）': '#28B463'
                             }
                         )
                         
-                        fig.update_layout(
-                            title_font=dict(size=18, color='#1A5276'),
+                        fig2.update_layout(
+                            title_font=dict(size=16, color='#1A5276'),
                             font=dict(size=13),
                             bargap=0.25,
                             bargroupgap=0.15,
                             plot_bgcolor='#F8F9F9',
                             paper_bgcolor='white',
                             legend_title_text='',
-                            yaxis=dict(tickformat='.2f', title='权益'),
-                            xaxis=dict(title='月份')
+                            yaxis=dict(tickformat='.2f', title='权益（亿元）'),
+                            xaxis=dict(title='月份'),
+                            legend=dict(
+                                orientation='h',
+                                yanchor='bottom',
+                                y=1.02,
+                                xanchor='center',
+                                x=0.5
+                            )
                         )
                         
-                        fig.update_traces(
+                        fig2.update_traces(
                             texttemplate='%{y:.2f}',
                             textfont=dict(size=11, color='black', family='Arial Black'),
                             textposition='outside'
                         )
                         
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        with st.expander("📋 查看详细数据"):
-                            display_cols = ['年月显示', '市场权益（百亿元）', '公司权益（亿元）']
-                            if '中位数（亿元）' in chart_df.columns:
-                                display_cols.append('中位数（亿元）')
-                            display_df = chart_df[display_cols].copy()
-                            display_df = display_df.sort_values('年月显示')
-                            display_df.columns = ['月份'] + display_cols[1:]
-                            
-                            for col in display_df.columns[1:]:
-                                display_df[col] = display_df[col].apply(
-                                    lambda x: f"{x:.2f}" if pd.notna(x) else '-'
-                                )
-                            
-                            st.dataframe(display_df, use_container_width=True, hide_index=True)
+                        st.plotly_chart(fig2, use_container_width=True)
                     else:
-                        st.info("没有可用于绘图的数据")
+                        st.info("暂无公司权益或市场中位数数据")
+                    
+                    # ============================================================
+                    # 详细数据表格
+                    # ============================================================
+                    with st.expander("📋 查看详细数据"):
+                        display_cols = ['年月显示', '市场权益（百亿元）', '公司权益（亿元）']
+                        if '中位数（亿元）' in chart_df.columns:
+                            display_cols.append('中位数（亿元）')
+                        display_df = chart_df[display_cols].copy()
+                        display_df = display_df.sort_values('年月显示')
+                        display_df.columns = ['月份'] + display_cols[1:]
+                        
+                        for col in display_df.columns[1:]:
+                            display_df[col] = display_df[col].apply(
+                                lambda x: f"{x:.2f}" if pd.notna(x) else '-'
+                            )
+                        
+                        st.dataframe(display_df, use_container_width=True, hide_index=True)
                         
     except Exception as e:
         st.warning(f"加载市场权益数据时出错: {e}")
