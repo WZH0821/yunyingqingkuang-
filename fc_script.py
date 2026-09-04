@@ -2455,11 +2455,45 @@ if not df_trade_stats.empty:
                     st.subheader(f"📊 {selected_month[:4]}年{selected_month[4:6]}月 部门统计")
                     st.dataframe(result, use_container_width=True, hide_index=True)
 
-                    col1, col2 = st.columns(2)
+                    # ============================================================
+                    # 汇总统计指标
+                    # ============================================================
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    # 计算汇总数据
+                    total_trading_customers = int(result['有交易客户数'].sum())
+                    total_profit_customers = int(result['盈利客户数'].sum()) if '盈利客户数' in result.columns else 0
+                    
+                    # 计算整体盈利面
+                    if total_trading_customers > 0:
+                        overall_profit_rate = (total_profit_customers / total_trading_customers) * 100
+                    else:
+                        overall_profit_rate = 0
+                    
                     with col1:
-                        st.metric("部门总数", len(result))
+                        st.metric(
+                            label="📊 部门总数",
+                            value=len(result)
+                        )
+                    
                     with col2:
-                        st.metric("客户总数", int(result['有交易客户数'].sum()))
+                        st.metric(
+                            label="👥 交易客户数",
+                            value=f"{total_trading_customers:,}"
+                        )
+                    
+                    with col3:
+                        st.metric(
+                            label="💰 盈利客户数",
+                            value=f"{total_profit_customers:,}"
+                        )
+                    
+                    with col4:
+                        st.metric(
+                            label="📈 盈利面",
+                            value=f"{overall_profit_rate:.2f}%",
+                            delta=f"{overall_profit_rate - 50:.2f}%" if overall_profit_rate != 0 else None
+                        )
                 else:
                     st.info(f"{selected_month} 无交易数据")
             else:
