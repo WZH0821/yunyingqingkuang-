@@ -613,12 +613,24 @@ try:
 
         if not metric_df.empty:
             decimal_places = 4 if selected_metric_global == '成交额' else 3
-            color_map = {f"{y}年": '#2E86C1' for y in [latest_year - 2, latest_year - 1, latest_year] if f"{y}年" in metric_df['年份'].unique()}
+            
+            # 获取实际存在的年份
+            existing_years = sorted(metric_df['年份'].unique())
+            
+            # 为每个年份分配不同的颜色（使用三种不同的颜色）
+            color_palette = ['#2E86C1', '#F39C12', '#28B463']  # 蓝色、橙色、绿色
+            
+            # 如果年份少于3个，只使用前几个颜色
+            color_map = {}
+            for i, year in enumerate(existing_years):
+                color_map[year] = color_palette[i % len(color_palette)]
+            
             fig = px.line(metric_df, x='月份', y='占比（%）', color='年份',
                           title=f'公司{selected_metric_global}占市场比重',
                           labels={'月份': '月份', '占比（%）': '占比（%）', '年份': '年份'},
                           color_discrete_map=color_map,
                           category_orders={'月份': list(MONTH_NAMES.values())})
+            
             fig.update_yaxes(tickformat=f'.{decimal_places}f', title_text='占比（%）')
             fig.update_traces(texttemplate=f'%{{y:.{decimal_places}f}}', textposition='top center',
                               textfont=dict(size=10), mode='lines+markers+text')
