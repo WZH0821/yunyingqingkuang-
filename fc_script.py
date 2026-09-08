@@ -2212,15 +2212,15 @@ if not df_fund_current.empty:
                 display_df = fund_df[['月份', '期末权益', '净入金', '留存手续费', '平仓盈亏']].copy()
                 display_df['期末权益'] = (display_df['期末权益'] / 100000000).round(2)
                 display_df['净入金'] = (display_df['净入金'] / 10000000).round(2)
-                display_df['留存手续费'] = (display_df['留存手续费'] / 100000).round(2)
+                display_df['留存手续费'] = (display_df['留存手续费'] / 10000).round(2)
                 display_df['平仓盈亏'] = (display_df['平仓盈亏'] / 1000000).round(2)
-                display_df.columns = ['月份', '期末权益（亿元）', '净入金（千万）', '留存手续费（十万）', '平仓盈亏（百万）']
+                display_df.columns = ['月份', '期末权益（亿元）', '净入金（千万）', '留存手续费（万）', '平仓盈亏（百万）']
                 st.dataframe(display_df.sort_values('月份', ascending=False), use_container_width=True, hide_index=True)
 
                 fund_df_sorted = fund_df.sort_values('月份')
                 fund_df_sorted['期末权益（亿元）'] = fund_df_sorted['期末权益'] / 100000000
                 fund_df_sorted['净入金（千万）'] = fund_df_sorted['净入金'] / 10000000
-                fund_df_sorted['留存手续费（十万）'] = fund_df_sorted['留存手续费'] / 100000
+                fund_df_sorted['留存手续费（十万）'] = fund_df_sorted['留存手续费'] / 10000
                 fund_df_sorted['平仓盈亏（百万）'] = fund_df_sorted['平仓盈亏'] / 1000000
 
                 color_map_fund = {'今年': '#2E86C1', '去年': '#F39C12'}
@@ -2233,7 +2233,7 @@ if not df_fund_current.empty:
                 cumsum_data = {
                     '期末权益': target_data['期末权益'].sum() / 100000000 if not target_data.empty else 0,
                     '净入金': target_data['净入金'].sum() / 10000000 if not target_data.empty else 0,
-                    '留存手续费': target_data['留存手续费'].sum() / 100000 if not target_data.empty else 0,
+                    '留存手续费': target_data['留存手续费'].sum() / 10000 if not target_data.empty else 0,
                     '平仓盈亏': target_data['平仓盈亏'].sum() / 1000000 if not target_data.empty else 0
                 }
 
@@ -2263,7 +2263,7 @@ if not df_fund_current.empty:
                 charts = [
                     ('期末权益（亿元）', '期末权益', '期末权益（亿）', '', ''),
                     ('净入金（千万）', '净入金', '净入金（千万）', '', f"{cumsum_data['净入金']:+.2f}千万"),
-                    ('留存手续费（十万）', '留存手续费', '留存手续费（十万）', '', f"{cumsum_data['留存手续费']:.2f}十万"),
+                    ('留存手续费（十万）', '留存手续费', '留存手续费（万）', '', f"{cumsum_data['留存手续费']:.2f}万"),
                     ('平仓盈亏（百万）', '平仓盈亏', '平仓盈亏（百万）', '', f"{cumsum_data['平仓盈亏']:+.2f}百万")
                 ]
 
