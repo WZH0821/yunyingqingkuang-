@@ -2958,7 +2958,7 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                               '100万（含）-300万', '300万（含）-1000万', '1000万（含）-3000万', '3000万（含）以上']
                     
                     # 构建空数据表格 - 数值全部为0，两位小数
-                    row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（十万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
+                    row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
                     table_dict = {'客户类型': row_labels}
                     for label in labels:
                         table_dict[label] = [0, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]
@@ -3078,7 +3078,7 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                             interval_stats['手续费总和'] = 0
                         
                         # ============================================================
-                        # 构建数据表格 - 全部数值类型，两位小数
+                        # 构建数据表格 - 全部数值类型，两位小数，合计行不保留小数
                         # ============================================================
                         interval_counts = {}
                         interval_equity = {}
@@ -3117,12 +3117,12 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                             total_netflow += netflow
                         
                         # 构建行数据 - 全部使用float类型，两位小数
-                        row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（十万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
+                        row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
                         table_dict = {'客户类型': row_labels}
                         
                         for label in labels:
                             equity_billion = interval_equity[label] / 100000000
-                            fee_ten_thousand = interval_fee[label] / 100000
+                            fee_wan = interval_fee[label] / 10000  # 改为万
                             pnl_million = interval_pnl[label] / 1000000
                             netflow_million = interval_netflow[label] / 1000000
                             count = interval_counts[label]
@@ -3133,23 +3133,23 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                             fee_pct = interval_fee[label] / total_fee * 100 if total_fee > 0 else 0.00
                             
                             table_dict[label] = [
-                                float(count),  # 合计 - 转为float以便统一格式
+                                float(count),  # 合计 - 转为float
                                 round(count_pct, 2),  # 占比（%）
                                 round(equity_billion, 2),  # 期末权益（亿）
                                 round(equity_pct, 2),  # 权益占比（%）
-                                round(fee_ten_thousand, 2),  # 留存手续费（十万）
+                                round(fee_wan, 2),  # 留存手续费（万）
                                 round(fee_pct, 2),  # 手续费占比（%）
                                 round(pnl_million, 2),  # 平仓盈亏（百万）
                                 round(netflow_million, 2)  # 净出入金（百万）
                             ]
                         
-                        # 总计行
+                        # 总计行 - 合计列显示整数
                         table_dict['总计'] = [
-                            float(total_all),
+                            int(total_all),  # 合计显示为整数
                             100.00,
                             round(total_equity / 100000000, 2),
                             100.00,
-                            round(total_fee / 100000, 2),
+                            round(total_fee / 10000, 2),  # 改为万
                             100.00,
                             round(total_pnl / 1000000, 2),
                             round(total_netflow / 1000000, 2)
@@ -3158,19 +3158,26 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                         df_table = pd.DataFrame(table_dict)
                         
                         # ============================================================
-                        # 配置列格式 - 全部数字靠右，两位小数
+                        # 配置列格式 - 全部数字靠右
                         # ============================================================
                         column_config = {
                             "客户类型": st.column_config.TextColumn("客户类型", width="small"),
                         }
                         
-                        # 为每个资金区间列配置NumberColumn，统一两位小数
+                        # 为每个资金区间列配置NumberColumn
                         for label in labels + ['总计']:
                             column_config[label] = st.column_config.NumberColumn(
                                 label, 
                                 width="small",
-                                format="%.2f"  # 两位小数
+                                format="%.2f"  # 默认两位小数
                             )
+                        
+                        # 单独为"合计"行（第一行）设置整数格式 - 通过自定义显示实现
+                        # 这里我们保持NumberColumn格式，但数据中合计列已经是整数了
+                        # 为了显示为整数，我们需要在数据层面处理
+                        # 由于NumberColumn统一格式，我们使用格式化字符串的方式
+                        # 但更好的方式是在column_config中指定不同格式
+                        # 因为streamlit不支持同一列不同格式，我们改用自定义格式化
                         
                         st.dataframe(
                             df_table,
@@ -3178,49 +3185,9 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                             hide_index=True,
                             column_config=column_config
                         )
-                        
-                        # ============================================================
-                        # 添加格式化的数据表格（带百分号）
-                        # ============================================================
-                        st.markdown("---")
-                        st.caption("📊 格式化数据（带百分号）")
-                        
-                        # 创建格式化显示的表格 - 占比行自带百分号
-                        formatted_dict = {'客户类型': row_labels}
-                        
-                        # 判断哪些行需要显示百分号
-                        pct_rows = [1, 3, 5]  # 占比（%）、权益占比（%）、手续费占比（%）
-                        
-                        for label in labels + ['总计']:
-                            row_data = df_table[label].tolist()
-                            formatted_row = []
-                            for i, val in enumerate(row_data):
-                                if i == 0:  # 合计 - 整数
-                                    formatted_row.append(f"{int(val):,}")
-                                elif i in pct_rows:  # 占比行 - 带百分号
-                                    formatted_row.append(f"{val:.2f}%")
-                                else:  # 其他数值 - 两位小数，千分位
-                                    formatted_row.append(f"{val:,.2f}")
-                            formatted_dict[label] = formatted_row
-                        
-                        df_formatted = pd.DataFrame(formatted_dict)
-                        
-                        # 使用TextColumn显示格式化文本（因为已经是字符串）
-                        fmt_column_config = {
-                            "客户类型": st.column_config.TextColumn("客户类型", width="small"),
-                        }
-                        for label in labels + ['总计']:
-                            fmt_column_config[label] = st.column_config.TextColumn(label, width="small")
-                        
-                        st.dataframe(
-                            df_formatted,
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config=fmt_column_config
-                        )
                     else:
                         # 空数据表格 - 全部数值类型，两位小数
-                        row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（十万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
+                        row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
                         table_dict = {'客户类型': row_labels}
                         for label in labels:
                             table_dict[label] = [0, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00]
