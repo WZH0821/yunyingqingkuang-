@@ -2984,7 +2984,11 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                         "客户类型": st.column_config.TextColumn("客户类型", width="small"),
                     }
                     for label in labels + ['总计']:
-                        column_config[label] = st.column_config.TextColumn(label, width="small")
+                        column_config[label] = st.column_config.TextColumn(
+                            label, 
+                            width="small",
+                            alignment="right"  # 右对齐
+                        )
                     
                     st.dataframe(
                         df_formatted,
@@ -3194,12 +3198,20 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                         
                         df_formatted = pd.DataFrame(formatted_dict)
                         
-                        # 使用TextColumn显示格式化文本
+                        # 使用TextColumn显示格式化文本，并设置为右对齐
                         column_config = {
-                            "客户类型": st.column_config.TextColumn("客户类型", width="small"),
+                            "客户类型": st.column_config.TextColumn(
+                                "客户类型", 
+                                width="small",
+                                alignment="left"  # 客户类型左对齐
+                            ),
                         }
                         for label in labels + ['总计']:
-                            column_config[label] = st.column_config.TextColumn(label, width="small")
+                            column_config[label] = st.column_config.TextColumn(
+                                label, 
+                                width="small",
+                                alignment="right"  # 数字列右对齐
+                            )
                         
                         st.dataframe(
                             df_formatted,
@@ -3216,10 +3228,18 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                         df_formatted = pd.DataFrame(formatted_dict)
                         
                         column_config = {
-                            "客户类型": st.column_config.TextColumn("客户类型", width="small"),
+                            "客户类型": st.column_config.TextColumn(
+                                "客户类型", 
+                                width="small",
+                                alignment="left"
+                            ),
                         }
                         for label in labels + ['总计']:
-                            column_config[label] = st.column_config.TextColumn(label, width="small")
+                            column_config[label] = st.column_config.TextColumn(
+                                label, 
+                                width="small",
+                                alignment="right"  # 数字列右对齐
+                            )
                         
                         st.dataframe(
                             df_formatted,
