@@ -2444,16 +2444,57 @@ if not df_trade_stats.empty:
                     else:
                         result['盈利面'] = 0
                     
-                    result = result.sort_values('有交易客户数', ascending=False)
+                    # 按有交易客户数降序排列
+                    result = result.sort_values('有交易客户数', ascending=False).reset_index(drop=True)
 
-                    for col in ['期末权益', '平仓盈亏', '净入金', '留存手续费']:
-                        if col in result.columns:
-                            result[col] = result[col].apply(lambda x: f"{int(x):,}")
-                    if '盈利面' in result.columns:
-                        result['盈利面'] = result['盈利面'].apply(lambda x: f"{x:.2f}%")
-
+                    # ============================================================
+                    # 显示表格 - 保持数字类型，使用column_config格式化
+                    # ============================================================
                     st.subheader(f"📊 {selected_month[:4]}年{selected_month[4:6]}月 部门统计")
-                    st.dataframe(result, use_container_width=True, hide_index=True)
+                    
+                    # 构建column_config
+                    column_config = {
+                        "部门": st.column_config.TextColumn("部门"),
+                        "有交易客户数": st.column_config.NumberColumn(
+                            "有交易客户数",
+                            format="%d"
+                        ),
+                        "盈利客户数": st.column_config.NumberColumn(
+                            "盈利客户数",
+                            format="%d"
+                        ),
+                        "平仓盈亏": st.column_config.NumberColumn(
+                            "平仓盈亏",
+                            format="%,.0f"
+                        ),
+                        "净入金": st.column_config.NumberColumn(
+                            "净入金",
+                            format="%,.0f"
+                        ),
+                        "留存手续费": st.column_config.NumberColumn(
+                            "留存手续费",
+                            format="%,.0f"
+                        ),
+                        "期末权益": st.column_config.NumberColumn(
+                            "期末权益",
+                            format="%,.0f"
+                        ),
+                        "盈利面": st.column_config.NumberColumn(
+                            "盈利面",
+                            format="%.2f%%"
+                        )
+                    }
+                    
+                    # 只保留存在的列
+                    existing_cols = [col for col in column_config.keys() if col in result.columns]
+                    filtered_config = {col: column_config[col] for col in existing_cols}
+                    
+                    st.dataframe(
+                        result[existing_cols],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=filtered_config
+                    )
 
                     # ============================================================
                     # 汇总统计指标
