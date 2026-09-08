@@ -3515,7 +3515,7 @@ if '市场权益' in data2_cache and not data2_cache['市场权益'].empty:
                     else:
                         st.info("暂无公司权益或市场中位数数据")
                     
-                    # ============================================================
+# ============================================================
                     # 详细数据表格
                     # ============================================================
                     with st.expander("📋 查看详细数据"):
@@ -3526,12 +3526,27 @@ if '市场权益' in data2_cache and not data2_cache['市场权益'].empty:
                         display_df = display_df.sort_values('年月显示')
                         display_df.columns = ['月份'] + display_cols[1:]
                         
+                        # 构建列配置，数字列右对齐
+                        column_config = {
+                            "月份": st.column_config.TextColumn("月份", width="medium", alignment="left"),
+                        }
                         for col in display_df.columns[1:]:
+                            # 将数据格式化为字符串（两位小数）
                             display_df[col] = display_df[col].apply(
                                 lambda x: f"{x:.2f}" if pd.notna(x) else '-'
                             )
+                            column_config[col] = st.column_config.TextColumn(
+                                col, 
+                                width="medium",
+                                alignment="right"  # 数字列右对齐
+                            )
                         
-                        st.dataframe(display_df, use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            display_df, 
+                            use_container_width=True, 
+                            hide_index=True,
+                            column_config=column_config
+                        )
                         
     except Exception as e:
         st.warning(f"加载市场权益数据时出错: {e}")
