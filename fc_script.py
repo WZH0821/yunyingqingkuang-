@@ -2958,28 +2958,25 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                               '100万（含）-300万', '300万（含）-1000万', '1000万（含）-3000万', '3000万（含）以上']
                     
                     # 构建空数据表格
-                    empty_data = {'客户类型': ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（十万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']}
+                    row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（十万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
+                    table_dict = {'客户类型': row_labels}
                     for label in labels:
-                        empty_data[label] = [0, '0.00%', '0.00', '0.00%', '0.00', '0.00%', '0.00', '0.00']
-                    empty_data['总计'] = [0, '100.00%', '0.00', '100.00%', '0.00', '100.00%', '0.00', '0.00']
-                    df_table = pd.DataFrame(empty_data)
+                        table_dict[label] = [0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                    table_dict['总计'] = [0, 100.0, 0.0, 100.0, 0.0, 100.0, 0.0, 0.0]
+                    df_table = pd.DataFrame(table_dict)
+                    
+                    # 配置列格式
+                    column_config = {
+                        "客户类型": st.column_config.TextColumn("客户类型", width="small"),
+                    }
+                    for label in labels + ['总计']:
+                        column_config[label] = st.column_config.Column(label, width="small")
                     
                     st.dataframe(
                         df_table,
                         use_container_width=True,
                         hide_index=True,
-                        column_config={
-                            "客户类型": st.column_config.TextColumn("客户类型", width="small"),
-                            "2万以下": st.column_config.TextColumn("2万以下", width="small"),
-                            "2万（含）-10万": st.column_config.TextColumn("2万（含）-10万", width="small"),
-                            "10万（含）-50万": st.column_config.TextColumn("10万（含）-50万", width="small"),
-                            "50万（含）-100万": st.column_config.TextColumn("50万（含）-100万", width="small"),
-                            "100万（含）-300万": st.column_config.TextColumn("100万（含）-300万", width="small"),
-                            "300万（含）-1000万": st.column_config.TextColumn("300万（含）-1000万", width="small"),
-                            "1000万（含）-3000万": st.column_config.TextColumn("1000万（含）-3000万", width="small"),
-                            "3000万（含）以上": st.column_config.TextColumn("3000万（含）以上", width="small"),
-                            "总计": st.column_config.TextColumn("总计", width="small")
-                        }
+                        column_config=column_config
                     )
                 else:
                     def format_fund_month(val):
@@ -3077,7 +3074,7 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                             interval_stats['手续费总和'] = 0
                         
                         # ============================================================
-                        # 构建数据表格 - 使用列式结构
+                        # 构建数据表格
                         # ============================================================
                         interval_counts = {}
                         interval_equity = {}
@@ -3115,7 +3112,7 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                             total_pnl += pnl
                             total_netflow += netflow
                         
-                        # 构建行数据（每个资金区间为一列）
+                        # 构建行数据
                         row_labels = ['合计', '占比（%）', '期末权益（亿）', '权益占比（%）', '留存手续费（十万）', '手续费占比（%）', '平仓盈亏（百万）', '净出入金（百万）']
                         table_dict = {'客户类型': row_labels}
                         
@@ -3151,23 +3148,60 @@ if '活跃客户' in data2_cache and not data2_cache['活跃客户'].empty:
                         
                         df_table = pd.DataFrame(table_dict)
                         
-                        # 使用column_config格式化显示
+                        # ============================================================
+                        # 配置列格式 - 显示两位小数 + 百分号
+                        # ============================================================
                         column_config = {
                             "客户类型": st.column_config.TextColumn("客户类型", width="small"),
                         }
                         
                         # 为每个资金区间列配置格式
                         for label in labels + ['总计']:
-                            column_config[label] = st.column_config.Column(
-                                label,
-                                width="small"
-                            )
+                            column_config[label] = st.column_config.Column(label, width="small")
                         
                         st.dataframe(
                             df_table,
                             use_container_width=True,
                             hide_index=True,
                             column_config=column_config
+                        )
+                        
+                        # ============================================================
+                        # 添加格式化的数据表格（带百分号和两位小数）
+                        # ============================================================
+                        st.markdown("---")
+                        st.caption("📊 格式化数据（带百分号）")
+                        
+                        # 创建格式化显示的表格
+                        formatted_dict = {'客户类型': row_labels}
+                        
+                        for label in labels + ['总计']:
+                            row_data = df_table[label].tolist()
+                            # 格式化：合计显示为整数，百分比显示为两位小数+%，其他显示为两位小数
+                            formatted_row = []
+                            for i, val in enumerate(row_data):
+                                if i == 0:  # 合计 - 显示为整数
+                                    formatted_row.append(f"{int(val):,}" if val == int(val) else f"{val:,.0f}")
+                                elif i in [1, 3, 5]:  # 占比（%）、权益占比（%）、手续费占比（%）
+                                    formatted_row.append(f"{val:.2f}%")
+                                else:  # 其他数值
+                                    formatted_row.append(f"{val:,.2f}")
+                            formatted_dict[label] = formatted_row
+                        
+                        df_formatted = pd.DataFrame(formatted_dict)
+                        
+                        # 使用column_config显示格式化数据
+                        fmt_column_config = {
+                            "客户类型": st.column_config.TextColumn("客户类型", width="small"),
+                        }
+                        for label in labels + ['总计']:
+                            fmt_column_config[label] = st.column_config.TextColumn(label, width="small")
+                        
+                        st.dataframe(
+                            df_formatted,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config=fmt_column_config
                         )
                     else:
                         # 空数据表格
