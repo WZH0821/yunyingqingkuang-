@@ -786,7 +786,24 @@ try:
                         row[f"{year}年"] = f"{val:.{decimal_display}f}"
                     table_data.append(row)
                 table_df = pd.DataFrame(table_data)
-                st.dataframe(table_df, use_container_width=True, hide_index=True)
+                
+                # 构建列配置，月份列左对齐，数字列右对齐
+                column_config = {
+                    "月份": st.column_config.TextColumn("月份", width="medium", alignment="left"),
+                }
+                for col in table_df.columns[1:]:  # 除月份列外的所有数字列
+                    column_config[col] = st.column_config.TextColumn(
+                        col, 
+                        width="medium",
+                        alignment="right"  # 数字列右对齐
+                    )
+                
+                st.dataframe(
+                    table_df, 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config=column_config
+                )
     else:
         st.info("暂无公司占市场比重数据")
 except Exception as e:
