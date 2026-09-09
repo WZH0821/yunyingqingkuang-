@@ -636,16 +636,33 @@ try:
                               textfont=dict(size=10), mode='lines+markers+text')
             st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("📋 查看详细数据"):
-            dec = 4 if selected_metric_global == '成交额' else 3
-            table_data = []
-            for month in sorted(data_by_month.keys()):
-                row = {'月份': MONTH_NAMES.get(month, str(month))}
-                for year in sorted(data_by_month[month].keys()):
-                    row[f"{year}年{selected_metric_global}"] = f"{data_by_month[month][year].get(selected_metric_global, 0):.{dec}f}"
-                table_data.append(row)
-            table_df = pd.DataFrame(table_data)
-            st.dataframe(table_df, use_container_width=True, hide_index=True)
+                with st.expander("📋 查看详细数据"):
+                    dec = 4 if selected_metric_global == '成交额' else 3
+                    table_data = []
+                    for month in sorted(data_by_month.keys()):
+                        row = {'月份': MONTH_NAMES.get(month, str(month))}
+                        for year in sorted(data_by_month[month].keys()):
+                            row[f"{year}年{selected_metric_global}"] = f"{data_by_month[month][year].get(selected_metric_global, 0):.{dec}f}"
+                        table_data.append(row)
+                    table_df = pd.DataFrame(table_data)
+                    
+                    # 构建列配置，月份列左对齐，数字列右对齐
+                    column_config = {
+                        "月份": st.column_config.TextColumn("月份", width="medium", alignment="left"),
+                    }
+                    for col in table_df.columns[1:]:  # 除月份列外的所有数字列
+                        column_config[col] = st.column_config.TextColumn(
+                            col, 
+                            width="medium",
+                            alignment="right"  # 数字列右对齐
+                        )
+                    
+                    st.dataframe(
+                        table_df, 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config=column_config
+                    )
     else:
         st.info("暂无公司占市场比重数据")
 except Exception as e:
