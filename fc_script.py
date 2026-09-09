@@ -645,24 +645,8 @@ try:
                     row[f"{year}年{selected_metric_global}"] = f"{data_by_month[month][year].get(selected_metric_global, 0):.{dec}f}"
                 table_data.append(row)
             table_df = pd.DataFrame(table_data)
-            
-            # 构建列配置，月份列左对齐，数字列右对齐
-            column_config = {
-                "月份": st.column_config.TextColumn("月份", width="medium", alignment="left"),
-            }
-            for col in table_df.columns[1:]:  # 除月份列外的所有数字列
-                column_config[col] = st.column_config.TextColumn(
-                    col, 
-                    width="medium",
-                    alignment="right"  # 数字列右对齐
-                )
-            
-            st.dataframe(
-                table_df, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config=column_config
-            )    else:
+            st.dataframe(table_df, use_container_width=True, hide_index=True)
+    else:
         st.info("暂无公司占市场比重数据")
 except Exception as e:
     st.warning(f"无法加载公司/市场对比数据: {e}")
@@ -785,24 +769,7 @@ try:
                         row[f"{year}年"] = f"{val:.{decimal_display}f}"
                     table_data.append(row)
                 table_df = pd.DataFrame(table_data)
-                
-                # 构建列配置，月份列左对齐，数字列右对齐
-                column_config = {
-                    "月份": st.column_config.TextColumn("月份", width="medium", alignment="left"),
-                }
-                for col in table_df.columns[1:]:  # 除月份列外的所有数字列
-                    column_config[col] = st.column_config.TextColumn(
-                        col, 
-                        width="medium",
-                        alignment="right"  # 数字列右对齐
-                    )
-                
-                st.dataframe(
-                    table_df, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config=column_config
-                )
+                st.dataframe(table_df, use_container_width=True, hide_index=True)
     else:
         st.info("暂无公司占市场比重数据")
 except Exception as e:
@@ -928,24 +895,7 @@ try:
                     row[key] = f"{val:.{decimal_display}f}"
                 table_data.append(row)
             table_df_energy = pd.DataFrame(table_data)
-            
-            # 构建列配置，月份列左对齐，数字列右对齐
-            column_config = {
-                "月份": st.column_config.TextColumn("月份", width="medium", alignment="left"),
-            }
-            for col in table_df_energy.columns[1:]:  # 除月份列外的所有数字列
-                column_config[col] = st.column_config.TextColumn(
-                    col, 
-                    width="medium",
-                    alignment="right"  # 数字列右对齐
-                )
-            
-            st.dataframe(
-                table_df_energy, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config=column_config
-            )
+            st.dataframe(table_df_energy, use_container_width=True, hide_index=True)
     else:
         st.info("暂无能源化工板块公司占市场比重数据")
 except Exception as e:
